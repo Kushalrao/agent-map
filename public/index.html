@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>agentview</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --dim: #9a9a9a;
+    --track: #dcdcdc;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: #2b2b2b;
+    font: 13px/1.5 -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+    height: 100vh; overflow: hidden;
+  }
+  #mapwrap { width: 100%; height: 100%; overflow: auto; background: var(--bg); }
+  svg { display: block; }
+
+  #hud {
+    position: fixed; left: 14px; bottom: 12px; z-index: 10;
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.85); backdrop-filter: blur(4px);
+    border: 1px solid #ececec; border-radius: 20px; padding: 5px 14px;
+    font: 11px ui-monospace, Menlo, monospace; color: var(--dim);
+    pointer-events: none;
+  }
+  #status { width: 7px; height: 7px; border-radius: 50%; background: #e05252; }
+  #status.on { background: #2fbf62; box-shadow: 0 0 6px #2fbf6288; }
+
+  .trackline { stroke: var(--track); stroke-width: 3; stroke-linecap: round; fill: none; }
+  .dirlabel { font-size: 10.5px; fill: #8a8a8a; font-family: ui-monospace, Menlo, monospace; }
+  .badge-letter { font-size: 10px; font-weight: 700; fill: #fff; }
+  .station { fill: #c4c4c4; transition: fill 0.4s; }
+  .stlabel { font-size: 9.5px; fill: #bbbbbb; font-family: ui-monospace, Menlo, monospace; transition: fill 0.3s; }
+  .stlabel.active { fill: #2b2b2b; font-weight: 600; }
+
+  .agent { transition: opacity 0.3s; }
+  .agent .sprite-g { filter: drop-shadow(0 1.5px 2px rgba(0,0,0,0.3)); }
+  .agent .bubble-bg { fill: #ffffff; stroke: #dddddd; filter: drop-shadow(0 2px 5px rgba(0,0,0,0.12)); }
+  .agent .bubble-text { font-size: 10.5px; font-family: ui-monospace, Menlo, monospace; fill: #444; }
+  .agent .bubble-verb { font-weight: 700; }
+</style>
+</head>
+<body>
+  <div id="mapwrap"></div>
+  <div id="hud"><span id="status"></span><span id="watchdir">connecting…</span></div>
+
+<script>
+const SVGNS = 'http://www.w3.org/2000/svg';
+const mapwrap = document.getElementById('mapwrap');
+const statusEl = document.getElementById('status');
+
+/* ---- radial map constants ---- */
+const RING = 150;      // distance from a folder hub to a subfolder hub
+const FILE_R0 = 52;    // first station's distance from its hub
+const FILE_DS = 42;    // spacing between stations on a spur
+const SECTOR_PAD = 0.05;
+const MARGIN = 140;
+
+/* ---- motion constants ---- */
+const SPEED = 120;     // cruise speed, px/s
+const ACCEL = 240;     // px/s²
+const HURRY = 3;       // cruise multiplier when the queue backs up
+const DWELL = 1400;    // ms an agent works at a station
+const RUN_FPS = 8;     // leg cadence
+const WORK_FPS = 4;    // wrench strikes per second
+const KID_SCALE = 0.62;
+const KID_LINGER = 4000;  // ms a sub-agent waits idle before running home
+
+const LINE_COLORS = ['#EE352E','#00933C','#B933AD','#0039A6','#FF6319','#6CBE45','#996633','#FCCC0A','#00ADD0','#808183','#A626AA','#FF7F50'];
+let spriteIdx = 0;
+let mainId = null;
+
+const VERBS = {
+  Edit: ['editing','edit'], MultiEdit: ['editing','edit'], NotebookEdit: ['editing','edit'],
+  Write: ['writing','write'], Read: ['reading','read'], FsChange: ['changed','fs'],
+};
+const VERB_COLOR = { read: '#00933C', edit: '#FF6319', write: '#B933AD', fs: '#9a9a9a' };
+
+/* ---- pixel plumber (original Mario-style sprite, 12x16) ----
+   C cap/shirt  S skin  H hair/mustache/shoes  O overalls  B buttons  W wrench  . empty */
+const PIXEL = 2.1;
+const HEAD = [
+  '...CCCCCC...',
+  '..CCCCCCCCC.',
+  '...HHSSSS...',
+  '..HSSSSSSS..',
+  '..HSSHSSSS..',
+  '..HHSSSSSS..',
+  '...HHHHHH...',
+];
+const SPRITE_STAND = [
+  ...HEAD,
+  '..CCOOOOCC..',
+  '.CCCOOOOCCC.',
+  '.SSCOBBOCSS.',
+  '.SSOOOOOOSS.',
+  '..OOOOOOOO..',
+  '..OOO..OOO..',
+  '..OOO..OOO..',
+  '.HHH....HHH.',
+  'HHHH....HHHH',
+];
+const SPRITE_RUN1 = [
+  ...HEAD,
+  '..CCOOOOCC..',
+  '.CCCOOOOCCC.',
+  '..SCOBBOCSS.',
+  '...OOOOOOSS.',
+  '..OOOOOOOO..',
+  '.OOOO..OOOO.',
+  'OOOO....OOOO',
+  'HHH......HHH',
+  '............',
+];
+const SPRITE_RUN2 = [
+  ...HEAD,
+  '..CCOOOOCC..',
+  '.CCCOOOOCCC.',
+  '.S.COBBOC.S.',
+  '..SOOOOOOS..',
+  '..OOOOOOOO..',
+  '...OOOOOO...',
+  '....OOOO....',
+  '....HHHH....',
+  '............',
+];
+const SPRITE_RUN3 = [
+  ...HEAD,
+  '..CCOOOOCC..',
+  '.CCCOOOOCCC.',
+  '.SSCOBBOCS..',
+  '.SSOOOOOO...',
+  '..OOOOOOOO..',
+  '..OOOO.OOO..',
+  '.OOO.....OOO',
+  'HHH......HHH',
+  '............',
+];
+const SPRITE_SIT1 = [
+  '............',
+  '.........W..',
+  '........WW..',
+  '.........S..',
+  '...CCCCCC...',
+  '..CCCCCCCCC.',
+  '...HHSSSS...',
+  '..HSSSSSSS..',
+  '..HSSHSSSS..',
+  '..HHSSSSSS..',
+  '...HHHHHH...',
+  '..CCOOOOCS..',
+  '.CCCOOOOCC..',
+  '..OOOOOOOO..',
+  '..OOOOOOOOO.',
+  '..HH....HHH.',
+];
+const SPRITE_SIT2 = [
+  '............',
+  '............',
+  '............',
+  '............',
+  '...CCCCCC...',
+  '..CCCCCCCCC.',
+  '...HHSSSS...',
+  '..HSSSSSSS..',
+  '..HSSHSSSS..',
+  '..HHSSSSSS..',
+  '...HHHHHH...',
+  '..CCOOOOC...',
+  '.CCCOOOOCSS.',
+  '..OOOOOOOOW.',
+  '..OOOOOOOOWW',
+  '..HH....HHH.',
+];
+const RUN_CYCLE = [1, 2, 3, 2];
+const SIT_FRAMES = [4, 5];
+const BASE_COLORS = { S: '#F8C89A', H: '#5F3813', O: '#2456D6', B: '#FFD45E', W: '#9AA1AC' };
+const OUTFITS = ['#EE352E', '#00933C', '#B933AD', '#FF6319', '#0039A6'];
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function buildFrame(parent, rows, colors) {
+  const fg = el('g', {}, parent);
+  rows.forEach((row, ry) => {
+    for (let cx = 0; cx < row.length; cx++) {
+      const c = colors[row[cx]];
+      if (!c) continue;
+      el('rect', {
+        x: (cx - 6) * PIXEL, y: (ry - 16) * PIXEL,
+        width: PIXEL + 0.06, height: PIXEL + 0.06, fill: c,
+      }, fg);
+    }
+  });
+  return fg;
+}
+
+let svg = null;
+let stations = new Map();  // file path -> {x, y, dir, dot, label, color}
+let hubs = new Map();      // dir key ('' = root) -> {x, y}
+let agents = new Map();
+let agentLayer = null;
+
+/* ---------- radial layout ----------
+   Each folder is a hub. Its files run outward along a spur in the folder's
+   angular sector; each subfolder gets its own wedge and its hub sits one RING
+   further out. The whole codebase becomes a transit network radiating from root. */
+function computeLayout(root) {
+  const out = { hubs: [], rays: [], stations: [] };
+  let colorIdx = 0;
+  const weight = n => (n.children || []).reduce(
+    (w, c) => w + (c.type === 'file' ? 1 : weight(c)), 0);
+
+  (function place(node, x, y, a0, a1) {
+    const key = node.path;
+    const color = LINE_COLORS[colorIdx++ % LINE_COLORS.length];
+    out.hubs.push({ key, x, y, color, name: key === '' ? '/' : key.split('/').pop() });
+
+    const files = (node.children || []).filter(c => c.type === 'file');
+    const subs = (node.children || []).filter(c => c.type === 'dir' && weight(c) > 0);
+    const items = [];
+    if (files.length) items.push({ kind: 'files', w: files.length });
+    for (const s of subs) items.push({ kind: 'dir', node: s, w: Math.max(1, weight(s)) });
+    const totalW = items.reduce((s, i) => s + i.w, 0) || 1;
+
+    let a = a0;
+    for (const it of items) {
+      const span = (a1 - a0) * (it.w / totalW);
+      const mid = a + span / 2;
+      const dx = Math.cos(mid), dy = Math.sin(mid);
+      if (it.kind === 'files') {
+        const endD = FILE_R0 + (files.length - 1) * FILE_DS;
+        out.rays.push({ x1: x, y1: y, x2: x + (endD + 16) * dx, y2: y + (endD + 16) * dy, color });
+        files.forEach((f, j) => {
+          const d = FILE_R0 + j * FILE_DS;
+          out.stations.push({ path: f.path, name: f.name, x: x + d * dx, y: y + d * dy, dir: key, color });
+        });
+      } else {
+        const bx = x + RING * dx, by = y + RING * dy;
+        out.rays.push({ x1: x, y1: y, x2: bx, y2: by, color: 'connector' });
+        place(it.node, bx, by, a + SECTOR_PAD, a + span - SECTOR_PAD);
+      }
+      a += span;
+    }
+  })(root, 0, 0, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2);
+  return out;
+}
+
+function buildMap(root) {
+  const L = computeLayout(root);
+  const xs = [], ys = [];
+  for (const h of L.hubs) { xs.push(h.x); ys.push(h.y); }
+  for (const r of L.rays) { xs.push(r.x1, r.x2); ys.push(r.y1, r.y2); }
+  for (const s of L.stations) { xs.push(s.x); ys.push(s.y); }
+  const minX = Math.min(...xs) - MARGIN, maxX = Math.max(...xs) + MARGIN;
+  const minY = Math.min(...ys) - MARGIN, maxY = Math.max(...ys) + MARGIN;
+  const ox = -minX, oy = -minY;
+  const width = Math.max(maxX - minX, mapwrap.clientWidth);
+  const height = Math.max(maxY - minY, mapwrap.clientHeight);
+
+  const oldAgents = [...agents.values()];
+  stations = new Map();
+  hubs = new Map();
+  mapwrap.replaceChildren();
+  svg = el('svg', { width, height, viewBox: `0 0 ${width} ${height}` });
+  mapwrap.appendChild(svg);
+
+  // tracks first (under everything)
+  for (const r of L.rays) {
+    el('line', { class: 'trackline', x1: r.x1 + ox, y1: r.y1 + oy, x2: r.x2 + ox, y2: r.y2 + oy }, svg);
+  }
+  // stations
+  for (const s of L.stations) {
+    const x = s.x + ox, y = s.y + oy;
+    const dot = el('circle', { class: 'station', cx: x, cy: y, r: 4 }, svg);
+    el('title', {}, dot).textContent = s.path;
+    const label = el('text', {
+      class: 'stlabel', x: x + 6, y: y + 13,
+      transform: `rotate(30 ${x + 6} ${y + 13})`,
+    }, svg);
+    label.textContent = s.name.length > 18 ? s.name.slice(0, 17) + '…' : s.name;
+    stations.set(s.path, { x, y, dir: s.dir, dot, label, color: s.color });
+  }
+  // hubs on top of tracks
+  for (const h of L.hubs) {
+    const x = h.x + ox, y = h.y + oy;
+    el('circle', { cx: x, cy: y, r: 9, fill: h.color }, svg);
+    const letter = el('text', { class: 'badge-letter', x, y: y + 3.5, 'text-anchor': 'middle' }, svg);
+    letter.textContent = h.name[0].toUpperCase();
+    const lbl = el('text', { class: 'dirlabel', x, y: y - 15, 'text-anchor': 'middle' }, svg);
+    lbl.textContent = h.name;
+    el('title', {}, lbl).textContent = h.key === '' ? '/' : h.key;
+    hubs.set(h.key, { x, y });
+  }
+
+  agentLayer = el('g', {}, svg);
+  const rootHub = hubs.get('');
+  for (const a of oldAgents) {
+    agentLayer.appendChild(a.g);
+    const st = a.lastFile && stations.get(a.lastFile);
+    if (st) { a.x = st.x; a.y = st.y; }
+    else if (rootHub) { a.x = rootHub.x; a.y = rootHub.y; }
+    a.moveTo(a.x, a.y);
+  }
+}
+
+async function refreshMap() {
+  const data = await fetch('/tree').then(r => r.json());
+  buildMap(data);
+}
+let refreshTimer = null;
+function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refreshMap, 800); }
+
+/* ---------- routing along the track network (it's a tree — unique path) ---------- */
+function parentOf(key) {
+  if (key === '') return null;
+  return key.includes('/') ? key.slice(0, key.lastIndexOf('/')) : '';
+}
+function chainOf(key) {
+  const c = [];
+  for (let p = key; p !== null; p = parentOf(p)) c.unshift(p);
+  return c;  // root-first
+}
+function routeVia(a, targetDir, tx, ty) {
+  const srcSt = a.lastFile && stations.get(a.lastFile);
+  const srcDir = srcSt ? srcSt.dir : '';
+  const A = chainOf(srcDir), B = chainOf(targetDir);
+  let i = 0;
+  while (i < A.length && i < B.length && A[i] === B[i]) i++;
+  const seq = [...A.slice(i).reverse(), A[i - 1], ...B.slice(i)];
+  const pts = [{ x: a.x, y: a.y }];
+  for (const k of seq) { const h = hubs.get(k); if (h) pts.push({ x: h.x, y: h.y }); }
+  pts.push({ x: tx, y: ty });
+  return pts.filter((p, j) => j === 0 || Math.hypot(p.x - pts[j-1].x, p.y - pts[j-1].y) > 0.5);
+}
+
+/* ---------- agents ---------- */
+function makeAgent(id) {
+  const isKid = id === 'fs-watcher' || mainId !== null;
+  if (!isKid) mainId = id;
+  const cap = id === 'fs-watcher' ? '#808183' : OUTFITS[spriteIdx++ % OUTFITS.length];
+  const colors = { ...BASE_COLORS, C: cap };
+  const scale = isKid ? KID_SCALE : 1;
+
+  const g = el('g', { class: 'agent' }, agentLayer);
+  const spriteG = el('g', { class: 'sprite-g', transform: `scale(${scale})` }, g);
+  const flip = el('g', {}, spriteG);
+  const pose = el('g', {}, flip);
+  const frames = [SPRITE_STAND, SPRITE_RUN1, SPRITE_RUN2, SPRITE_RUN3, SPRITE_SIT1, SPRITE_SIT2]
+    .map(rows => buildFrame(pose, rows, colors));
+  frames.forEach((f, i) => f.setAttribute('visibility', i === 0 ? 'visible' : 'hidden'));
+
+  const bubbleY = isKid ? -44 : -60;
+  const bubble = el('g', { visibility: 'hidden' }, g);
+  const bubbleBg = el('rect', { class: 'bubble-bg', y: bubbleY, height: 22, rx: 11 }, bubble);
+  const bubbleText = el('text', { class: 'bubble-text', y: bubbleY + 15 }, bubble);
+
+  // main starts at the root hub; kids pop out of the main agent
+  const main = mainId && agents.get(mainId);
+  const home = hubs.get('') || { x: 100, y: 100 };
+  const sx = isKid && main ? main.x : home.x;
+  const sy = isKid && main ? main.y : home.y;
+
+  const a = {
+    id, g, bubble, bubbleBg, bubbleText, frames, flip, pose, isKid,
+    x: sx, y: sy, lastFile: null,
+    state: 'idle', queue: [], path: [], seg: 0, segT: 0,
+    remaining: 0, vel: 0, animT: 0, workT: 0, frame: 0,
+    dwellUntil: 0, lastActive: performance.now(), returning: false,
+    gait: isKid ? 1.35 : 1,   // kids scurry
+    moveTo(x, y) { this.x = x; this.y = y; g.setAttribute('transform', `translate(${x} ${y})`); },
+    setFrame(i) {
+      if (i === this.frame) return;
+      this.frame = i;
+      frames.forEach((f, j) => f.setAttribute('visibility', j === i ? 'visible' : 'hidden'));
+    },
+    face(dir) { flip.setAttribute('transform', dir < 0 ? 'scale(-1 1)' : 'scale(1 1)'); },
+    setPose(lean, bob) {
+      pose.setAttribute('transform', `translate(0 ${bob.toFixed(2)}) rotate(${lean.toFixed(2)} 0 -17)`);
+    },
+    say(verbText, verbClass, file) {
+      bubbleText.replaceChildren();
+      const v = el('tspan', { class: 'bubble-verb', fill: VERB_COLOR[verbClass] }, bubbleText);
+      v.textContent = verbText + ' ';
+      const f = el('tspan', {}, bubbleText);
+      f.textContent = file.split('/').pop();
+      const w = bubbleText.getComputedTextLength() + 20;
+      bubbleBg.setAttribute('x', -w / 2); bubbleBg.setAttribute('width', w);
+      bubbleText.setAttribute('x', -w / 2 + 10);
+      bubble.setAttribute('visibility', 'visible');
+      clearTimeout(this.sayTimer);
+      this.sayTimer = setTimeout(() => bubble.setAttribute('visibility', 'hidden'), 3000);
+    },
+  };
+  a.moveTo(sx, sy);
+  agents.set(id, a);
+  return a;
+}
+
+function getAgent(id) { return agents.get(id) || makeAgent(id); }
+
+function pathLength(pts) {
+  let d = 0;
+  for (let i = 1; i < pts.length; i++) d += Math.hypot(pts[i].x - pts[i-1].x, pts[i].y - pts[i-1].y);
+  return d;
+}
+
+function beginPath(a, pts) {
+  a.path = pts;
+  a.seg = 0; a.segT = 0;
+  a.remaining = pathLength(pts);
+  a.vel = Math.max(a.vel, 20);
+  a.state = 'moving';
+}
+
+function startNext(a) {
+  const job = a.queue.shift();
+  if (!job) return;
+  const st = stations.get(job.file);
+  if (!st) { scheduleRefresh(); return; }
+  a.job = job;
+  a.returning = false;
+  beginPath(a, routeVia(a, st.dir, st.x, st.y));
+  ensureVisible(st.x, st.y);
+}
+
+/* Sub-agent finished — run home to the main agent and disappear into them. */
+function startReturn(a) {
+  const main = mainId && agents.get(mainId);
+  const target = main
+    ? (main.lastFile && stations.get(main.lastFile)) || { dir: '', ...(hubs.get('') || { x: a.x, y: a.y }) }
+    : { dir: '', ...(hubs.get('') || { x: a.x, y: a.y }) };
+  a.returning = true;
+  a.job = null;
+  beginPath(a, routeVia(a, target.dir, target.x, target.y));
+}
+
+function despawn(a) {
+  a.g.style.opacity = '0';
+  setTimeout(() => a.g.remove(), 350);
+  agents.delete(a.id);
+}
+
+function arrive(a) {
+  if (a.returning) { despawn(a); return; }
+  const job = a.job;
+  const st = stations.get(job.file);
+  a.state = 'working';
+  a.dwellUntil = performance.now() + DWELL;
+  a.lastFile = job.file;
+  a.lastActive = performance.now();
+  a.vel = 0;
+  a.workT = 0;
+  a.setFrame(SIT_FRAMES[0]);   // sit down, bring out the wrench
+  a.setPose(0, 0);
+  a.say(job.verbText, job.verbClass, job.file);
+
+  if (st) {
+    st.dot.setAttribute('fill', st.color);
+    st.dot.setAttribute('r', 5);
+    st.label.classList.add('active');
+    clearTimeout(st.labelTimer);
+    st.labelTimer = setTimeout(() => st.label.classList.remove('active'), 4000);
+  }
+}
+
+/* ---------- animation loop ---------- */
+let lastTs = performance.now();
+function tick(ts) {
+  const dt = Math.min(0.05, (ts - lastTs) / 1000);
+  lastTs = ts;
+  for (const a of [...agents.values()]) {
+    if (a.state === 'moving') {
+      const cruise = SPEED * (a.queue.length > 2 ? HURRY : 1);
+      const brake = Math.sqrt(2 * ACCEL * Math.max(0, a.remaining));
+      a.vel = Math.min(a.vel + ACCEL * dt, cruise, Math.max(brake, 26));
+      let step = a.vel * dt;
+      a.remaining = Math.max(0, a.remaining - step);
+
+      while (step > 0 && a.seg < a.path.length - 1) {
+        const p0 = a.path[a.seg], p1 = a.path[a.seg + 1];
+        const segLen = Math.hypot(p1.x - p0.x, p1.y - p0.y);
+        const remain = segLen * (1 - a.segT);
+        if (step < remain) { a.segT += step / segLen; step = 0; }
+        else { step -= remain; a.seg++; a.segT = 0; }
+      }
+
+      if (a.seg >= a.path.length - 1) {
+        const end = a.path[a.path.length - 1];
+        a.moveTo(end.x, end.y);
+        a.setFrame(0);
+        a.setPose(0, 0);
+        arrive(a);
+      } else {
+        const p0 = a.path[a.seg], p1 = a.path[a.seg + 1];
+        const dir = Math.sign(p1.x - p0.x);
+        if (dir) a.face(dir);
+        const rate = (a.vel / SPEED) * a.gait;
+        a.animT += dt * rate;
+        a.setFrame(RUN_CYCLE[Math.floor(a.animT * RUN_FPS) % RUN_CYCLE.length]);
+        const lean = 8 * Math.min(1, a.vel / SPEED);
+        const bob = -Math.abs(Math.sin(a.animT * RUN_FPS * Math.PI / 2)) * 2.2;
+        a.setPose(lean, bob);
+        a.moveTo(p0.x + (p1.x - p0.x) * a.segT, p0.y + (p1.y - p0.y) * a.segT);
+      }
+    } else if (a.state === 'working') {
+      a.workT += dt;
+      a.setFrame(SIT_FRAMES[Math.floor(a.workT * WORK_FPS) % SIT_FRAMES.length]);
+      if (performance.now() > a.dwellUntil) {
+        a.state = 'idle';
+        a.setFrame(0);
+        if (a.queue.length) startNext(a);
+      }
+    } else if (a.state === 'idle') {
+      if (a.queue.length) startNext(a);
+      else if (a.isKid && performance.now() - a.lastActive > KID_LINGER) startReturn(a);
+    }
+  }
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+function ensureVisible(x, y) {
+  const pad = 80;
+  const { scrollLeft, scrollTop, clientWidth, clientHeight } = mapwrap;
+  let sx = scrollLeft, sy = scrollTop;
+  if (x < scrollLeft + pad || x > scrollLeft + clientWidth - pad) sx = x - clientWidth / 2;
+  if (y < scrollTop + pad || y > scrollTop + clientHeight - pad) sy = y - clientHeight / 2;
+  if (sx !== scrollLeft || sy !== scrollTop) mapwrap.scrollTo({ left: sx, top: sy, behavior: 'smooth' });
+}
+
+/* ---------- event stream ---------- */
+async function handleActivity(ev) {
+  const [verbText, verbClass] = VERBS[ev.tool] || ['touching', 'edit'];
+  if (ev.external) return;
+
+  if (!stations.has(ev.file)) await refreshMap();
+  if (!stations.has(ev.file)) return;
+
+  const a = getAgent(ev.agent);
+  a.lastActive = performance.now();
+  const last = a.queue[a.queue.length - 1];
+  if (last && last.file === ev.file) { last.verbText = verbText; last.verbClass = verbClass; return; }
+  a.queue.push({ file: ev.file, verbText, verbClass });
+  if (a.queue.length > 6) a.queue.shift();
+}
+
+function connect() {
+  const es = new EventSource('/events');
+  es.onopen = () => statusEl.classList.add('on');
+  es.onerror = () => statusEl.classList.remove('on');
+  es.onmessage = (m) => {
+    const ev = JSON.parse(m.data);
+    if (ev.type === 'hello') { document.getElementById('watchdir').textContent = ev.watchDir; return; }
+    if (ev.type !== 'activity' || !ev.file) return;
+    handleActivity(ev);
+  };
+}
+
+refreshMap().then(() => {
+  const root = hubs.get('');
+  if (root) mapwrap.scrollTo({
+    left: root.x - mapwrap.clientWidth / 2,
+    top: root.y - mapwrap.clientHeight / 2,
+  });
+  connect();
+});
+</script>
+</body>
+</html>

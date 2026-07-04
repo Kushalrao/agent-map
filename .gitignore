@@ -1,0 +1,13 @@
+node_modules/
+.DS_Store
+
+# local demo fixtures generated to fatten the map — not part of the tool
+playground/
+src/
+server/
+lib/
+tests/
+docs/
+scripts/
+config/
+styles/
