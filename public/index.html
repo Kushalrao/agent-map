@@ -19,6 +19,35 @@
   #mapwrap { width: 100%; height: 100%; overflow: auto; background: var(--bg); }
   svg { display: block; }
 
+  #picker {
+    position: fixed; left: 14px; top: 14px; z-index: 20;
+    display: flex; align-items: flex-start; gap: 8px;
+  }
+  #pickBtn, .pickOpt {
+    width: 54px; height: 54px; border-radius: 50%;
+    background: rgba(255,255,255,0.92); backdrop-filter: blur(4px);
+    border: 1px solid #e2e2e2; box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    cursor: pointer; padding: 0;
+    display: flex; align-items: center; justify-content: center;
+    transition: transform 0.12s, box-shadow 0.12s;
+  }
+  #pickBtn:hover, .pickOpt:hover { transform: scale(1.12); box-shadow: 0 3px 12px rgba(0,0,0,0.15); }
+  .pickOpt.selected { border: 2px solid #FF6319; }
+  #pickMenu {
+    display: none; flex-wrap: wrap; gap: 8px; max-width: 260px;
+    animation: pickin 0.15s ease-out;
+  }
+  #pickMenu.open { display: flex; }
+  @keyframes pickin { from { opacity: 0; transform: translateX(-8px); } }
+  .pickOpt { position: relative; }
+  .pickOpt .nm {
+    position: absolute; top: 56px; left: 50%; transform: translateX(-50%);
+    font: 10px ui-monospace, Menlo, monospace; color: #8a8a8a;
+    background: rgba(255,255,255,0.9); padding: 1px 6px; border-radius: 8px;
+    opacity: 0; transition: opacity 0.12s; pointer-events: none; white-space: nowrap;
+  }
+  .pickOpt:hover .nm { opacity: 1; }
+
   #hud {
     position: fixed; left: 14px; bottom: 12px; z-index: 10;
     display: flex; align-items: center; gap: 8px;
@@ -46,6 +75,10 @@
 </head>
 <body>
   <div id="mapwrap"></div>
+  <div id="picker">
+    <button id="pickBtn" title="change character"></button>
+    <div id="pickMenu"></div>
+  </div>
   <div id="hud"><span id="status"></span><span id="watchdir">connecting…</span></div>
 
 <script>
@@ -80,10 +113,12 @@ const VERBS = {
 };
 const VERB_COLOR = { read: '#00933C', edit: '#FF6319', write: '#B933AD', fs: '#9a9a9a' };
 
-/* ---- pixel plumber (original Mario-style sprite, 12x16) ----
-   C cap/shirt  S skin  H hair/mustache/shoes  O overalls  B buttons  W wrench  . empty */
-const PIXEL = 2.1;
-const HEAD = [
+/* ---- characters (original pixel sprites, 12x16, feet on the bottom row) ----
+   Letters map to per-character colors; T is always the tool. */
+const PIXEL = 4.2;
+
+/* humanoid skeleton (plumber / robot / ninja share it) */
+const H_HEAD = [
   '...CCCCCC...',
   '..CCCCCCCCC.',
   '...HHSSSS...',
@@ -92,8 +127,8 @@ const HEAD = [
   '..HHSSSSSS..',
   '...HHHHHH...',
 ];
-const SPRITE_STAND = [
-  ...HEAD,
+const H_STAND = [
+  ...H_HEAD,
   '..CCOOOOCC..',
   '.CCCOOOOCCC.',
   '.SSCOBBOCSS.',
@@ -104,8 +139,8 @@ const SPRITE_STAND = [
   '.HHH....HHH.',
   'HHHH....HHHH',
 ];
-const SPRITE_RUN1 = [
-  ...HEAD,
+const H_RUN1 = [
+  ...H_HEAD,
   '..CCOOOOCC..',
   '.CCCOOOOCCC.',
   '..SCOBBOCSS.',
@@ -116,8 +151,8 @@ const SPRITE_RUN1 = [
   'HHH......HHH',
   '............',
 ];
-const SPRITE_RUN2 = [
-  ...HEAD,
+const H_RUN2 = [
+  ...H_HEAD,
   '..CCOOOOCC..',
   '.CCCOOOOCCC.',
   '.S.COBBOC.S.',
@@ -128,8 +163,8 @@ const SPRITE_RUN2 = [
   '....HHHH....',
   '............',
 ];
-const SPRITE_RUN3 = [
-  ...HEAD,
+const H_RUN3 = [
+  ...H_HEAD,
   '..CCOOOOCC..',
   '.CCCOOOOCCC.',
   '.SSCOBBOCS..',
@@ -140,46 +175,251 @@ const SPRITE_RUN3 = [
   'HHH......HHH',
   '............',
 ];
-const SPRITE_SIT1 = [
+const H_SIT1 = [
   '............',
-  '.........W..',
-  '........WW..',
+  '.........T..',
+  '........TT..',
   '.........S..',
-  '...CCCCCC...',
-  '..CCCCCCCCC.',
-  '...HHSSSS...',
-  '..HSSSSSSS..',
-  '..HSSHSSSS..',
-  '..HHSSSSSS..',
-  '...HHHHHH...',
+  ...H_HEAD,
   '..CCOOOOCS..',
   '.CCCOOOOCC..',
   '..OOOOOOOO..',
   '..OOOOOOOOO.',
   '..HH....HHH.',
 ];
-const SPRITE_SIT2 = [
+const H_SIT2 = [
   '............',
   '............',
   '............',
   '............',
-  '...CCCCCC...',
-  '..CCCCCCCCC.',
-  '...HHSSSS...',
-  '..HSSSSSSS..',
-  '..HSSHSSSS..',
-  '..HHSSSSSS..',
-  '...HHHHHH...',
+  ...H_HEAD,
   '..CCOOOOC...',
   '.CCCOOOOCSS.',
-  '..OOOOOOOOW.',
-  '..OOOOOOOOWW',
+  '..OOOOOOOOT.',
+  '..OOOOOOOOTT',
   '..HH....HHH.',
 ];
-const RUN_CYCLE = [1, 2, 3, 2];
-const SIT_FRAMES = [4, 5];
-const BASE_COLORS = { S: '#F8C89A', H: '#5F3813', O: '#2456D6', B: '#FFD45E', W: '#9AA1AC' };
-const OUTFITS = ['#EE352E', '#00933C', '#B933AD', '#FF6319', '#0039A6'];
+const HUMANOID = { stand: H_STAND, run: [H_RUN1, H_RUN2, H_RUN3], runCycle: [1, 2, 3, 2], work: [H_SIT1, H_SIT2] };
+
+/* quadruped skeleton (dog / cat) — works by pawing at the station */
+const Q_STAND = [
+  '............','............','............','............','............','............','............',
+  '..........DD',
+  '.D......BBBB',
+  '.DD.....BKBB',
+  '..D..BBBBBBN',
+  '..BBBBBBBB..',
+  '..BWWWWBBB..',
+  '..BB....BB..',
+  '..BB....BB..',
+  '..DD....DD..',
+];
+const Q_RUN1 = [
+  ...Q_STAND.slice(0, 13),
+  '.BB......BB.',
+  'BB........BB',
+  'DD........DD',
+];
+const Q_RUN2 = [
+  ...Q_STAND.slice(0, 13),
+  '...BB..BB...',
+  '....BBBB....',
+  '....DDDD....',
+];
+const Q_SIT1 = [
+  '............','............','............','............','............',
+  '.........DD.',
+  '........BBBB',
+  '........BKBB',
+  '.D......BBBN',
+  '.DD....BBBB.',
+  '..D...BBBB..',
+  '.....BBBBB..',
+  '....BWWBBB..',
+  '....BWWBB...',
+  '....BB..BB..',
+  '....DD..DD..',
+];
+const Q_SIT2 = [
+  ...Q_SIT1.slice(0, 13),
+  '....BWWBB.B.',
+  '....BB..B...',
+  '....DD..DD..',
+];
+const QUAD = { stand: Q_STAND, run: [Q_RUN1, Q_RUN2], runCycle: [1, 2], work: [Q_SIT1, Q_SIT2] };
+
+/* dino — biped with a tail */
+const D_STAND = [
+  '............','............','............','............',
+  '.......GGGG.',
+  '.......GKGG.',
+  '.......GGGG.',
+  '.......GG...',
+  'G.....GGGG..',
+  'GG...GGGGG..',
+  '.GGGGGGGGG..',
+  '..GGGGGGGG..',
+  '...GGGGGG...',
+  '....GG.GG...',
+  '....GG.GG...',
+  '....GG..GG..',
+];
+const D_RUN1 = [
+  ...D_STAND.slice(0, 13),
+  '...GG...GG..',
+  '..GG.....GG.',
+  '.GG.......GG',
+];
+const D_RUN2 = [
+  ...D_STAND.slice(0, 13),
+  '....GGGG....',
+  '.....GGG....',
+  '....GGG.....',
+];
+const D_SIT1 = [
+  '............','............',
+  '.........TT.',
+  '..........T.',
+  ...D_STAND.slice(4, 13),
+  '...GGGGGGG..',
+  '...GG...GG..',
+  '............',
+];
+const D_SIT2 = [
+  '............','............','............','............',
+  ...D_STAND.slice(4, 12),
+  '...GGGGGG.T.',
+  '...GGGGGGGTT',
+  '...GG...GG..',
+  '............',
+];
+const DINO = { stand: D_STAND, run: [D_RUN1, D_RUN2], runCycle: [1, 2], work: [D_SIT1, D_SIT2] };
+
+/* ghost — floats, no legs */
+const G_STAND = [
+  '............','............','............','............',
+  '...GGGGGG...',
+  '..GGGGGGGG..',
+  '..GKGGGKGG..',
+  '..GGGGGGGG..',
+  '..GGGGGGGG..',
+  '..GGGGGGGG..',
+  '..GGGGGGGG..',
+  '..GGGGGGGG..',
+  '..G.GG.GG.G.',
+  '............','............','............',
+];
+const G_RUN1 = [
+  ...G_STAND.slice(0, 12),
+  '..GG.GG.GG..',
+  '............','............','............',
+];
+const G_SIT1 = [
+  '............','............',
+  '.........TT.',
+  '..........T.',
+  ...G_STAND.slice(4, 16),
+];
+const G_SIT2 = [
+  ...G_STAND.slice(0, 10),
+  '..GGGGGGGG.T',
+  '..GGGGGGGGTT',
+  '..G.GG.GG.G.',
+  '............','............','............',
+];
+const GHOST = { stand: G_STAND, run: [G_RUN1], runCycle: [0, 1], work: [G_SIT1, G_SIT2] };
+
+/* frog — squat hopper */
+const F_STAND = [
+  '............','............','............','............','............','............','............','............',
+  '..GG....GG..',
+  '..GKG..GKG..',
+  '..GGGGGGGG..',
+  '.GGGGGGGGGG.',
+  '.GGWWWWWWGG.',
+  '.GGWWWWWWGG.',
+  '.GG......GG.',
+  'GGG......GGG',
+];
+const F_RUN1 = [
+  ...F_STAND.slice(0, 14),
+  '.G........G.',
+  'GG........GG',
+];
+const F_RUN2 = [
+  ...F_STAND.slice(0, 14),
+  '..GGG..GGG..',
+  '............',
+];
+const F_SIT1 = [
+  '............','............','............','............','............','............',
+  '.........TT.',
+  '..........T.',
+  ...F_STAND.slice(8, 16),
+];
+const F_SIT2 = [
+  ...F_STAND.slice(0, 11),
+  '.GGGGGGGGGGT',
+  '.GGWWWWWWGTT',
+  '.GGWWWWWWGG.',
+  '.GG......GG.',
+  'GGG......GGG',
+];
+const FROG = { stand: F_STAND, run: [F_RUN1, F_RUN2], runCycle: [1, 2], work: [F_SIT1, F_SIT2] };
+
+const TOOL = '#9AA1AC';
+const CHARACTERS = {
+  plumber: {
+    name: 'Plumber', grids: HUMANOID,
+    colors: { C: '#EE352E', S: '#F8C89A', H: '#5F3813', O: '#2456D6', B: '#FFD45E', T: TOOL },
+    variants: [{}, { C: '#00933C' }, { C: '#B933AD' }, { C: '#FF6319' }, { C: '#0039A6' }],
+    gray: { C: '#808183' },
+  },
+  dog: {
+    name: 'Dog', grids: QUAD,
+    colors: { B: '#C68642', D: '#8B5A2B', W: '#F2E5CF', K: '#2B2B2B', N: '#332A22', T: TOOL },
+    variants: [{}, { B: '#8E97A6', D: '#5F6673' }, { B: '#3E3A36', D: '#26231F', W: '#C9C2B8' }, { B: '#EBD8A7', D: '#C0A96B' }],
+    gray: { B: '#A7A9AC', D: '#7E8083' },
+  },
+  cat: {
+    name: 'Cat', grids: QUAD,
+    colors: { B: '#E8935A', D: '#C06A2E', W: '#FFF1DE', K: '#2B2B2B', N: '#D97878', T: TOOL },
+    variants: [{}, { B: '#9AA5B1', D: '#6E7987' }, { B: '#3A3F4A', D: '#23262E', W: '#8E97A6' }, { B: '#F0E3C8', D: '#CDB88E' }],
+    gray: { B: '#A7A9AC', D: '#7E8083' },
+  },
+  robot: {
+    name: 'Robot', grids: HUMANOID,
+    colors: { C: '#5B6C8F', S: '#C3CEE0', H: '#2E3A4E', O: '#7E8CA8', B: '#FFD45E', T: TOOL },
+    variants: [{}, { C: '#8F5B6C' }, { C: '#5B8F6C' }, { C: '#8F7A5B' }],
+    gray: { C: '#808183', O: '#9A9EA6' },
+  },
+  ninja: {
+    name: 'Ninja', grids: HUMANOID,
+    colors: { C: '#23262E', S: '#F8C89A', H: '#14161C', O: '#3A3F4D', B: '#E33A3A', T: '#B7BDC9' },
+    variants: [{}, { B: '#3AA0E3' }, { B: '#3AE38A' }, { B: '#E3D53A' }],
+    gray: { C: '#6E7178', O: '#8B8E95' },
+  },
+  dino: {
+    name: 'Dino', grids: DINO,
+    colors: { G: '#58B368', K: '#233238', T: TOOL },
+    variants: [{}, { G: '#B368A2' }, { G: '#5B8FD6' }, { G: '#D6A25B' }],
+    gray: { G: '#9AA0A6' },
+  },
+  ghost: {
+    name: 'Ghost', grids: GHOST,
+    colors: { G: '#BCC9E6', K: '#3A4668', T: TOOL },
+    variants: [{}, { G: '#E6BCCB' }, { G: '#BCE6D2' }, { G: '#E6DCBC' }],
+    gray: { G: '#C9CCD2' },
+  },
+  frog: {
+    name: 'Frog', grids: FROG,
+    colors: { G: '#4FAE5C', W: '#DFF2D8', K: '#233238', T: TOOL },
+    variants: [{}, { G: '#AE8F4F', W: '#F2E8D8' }, { G: '#4F8FAE', W: '#D8E8F2' }, { G: '#AE4F6E', W: '#F2D8E0' }],
+    gray: { G: '#9AA0A6' },
+  },
+};
+let charKey = localStorage.getItem('agentview-char');
+if (!CHARACTERS[charKey]) charKey = 'plumber';
 
 function el(tag, attrs, parent) {
   const e = document.createElementNS(SVGNS, tag);
@@ -343,22 +583,31 @@ function routeVia(a, targetDir, tx, ty) {
 }
 
 /* ---------- agents ---------- */
+function rebuildSprite(a) {
+  const def = CHARACTERS[charKey];
+  const patch = a.id === 'fs-watcher' ? def.gray : def.variants[a.variantIdx % def.variants.length];
+  const colors = { ...def.colors, ...patch };
+  const grids = def.grids;
+  a.pose.replaceChildren();
+  a.frames = [grids.stand, ...grids.run, ...grids.work].map(rows => buildFrame(a.pose, rows, colors));
+  a.runCycle = grids.runCycle;
+  a.workBase = 1 + grids.run.length;
+  a.workCount = grids.work.length;
+  a.frame = -1;
+  a.setFrame(a.state === 'working' ? a.workBase : 0);
+}
+
 function makeAgent(id) {
   const isKid = id === 'fs-watcher' || mainId !== null;
   if (!isKid) mainId = id;
-  const cap = id === 'fs-watcher' ? '#808183' : OUTFITS[spriteIdx++ % OUTFITS.length];
-  const colors = { ...BASE_COLORS, C: cap };
   const scale = isKid ? KID_SCALE : 1;
 
   const g = el('g', { class: 'agent' }, agentLayer);
   const spriteG = el('g', { class: 'sprite-g', transform: `scale(${scale})` }, g);
   const flip = el('g', {}, spriteG);
   const pose = el('g', {}, flip);
-  const frames = [SPRITE_STAND, SPRITE_RUN1, SPRITE_RUN2, SPRITE_RUN3, SPRITE_SIT1, SPRITE_SIT2]
-    .map(rows => buildFrame(pose, rows, colors));
-  frames.forEach((f, i) => f.setAttribute('visibility', i === 0 ? 'visible' : 'hidden'));
 
-  const bubbleY = isKid ? -44 : -60;
+  const bubbleY = isKid ? -58 : -84;
   const bubble = el('g', { visibility: 'hidden' }, g);
   const bubbleBg = el('rect', { class: 'bubble-bg', y: bubbleY, height: 22, rx: 11 }, bubble);
   const bubbleText = el('text', { class: 'bubble-text', y: bubbleY + 15 }, bubble);
@@ -370,21 +619,23 @@ function makeAgent(id) {
   const sy = isKid && main ? main.y : home.y;
 
   const a = {
-    id, g, bubble, bubbleBg, bubbleText, frames, flip, pose, isKid,
+    id, g, bubble, bubbleBg, bubbleText, flip, pose, isKid,
+    frames: [], runCycle: [0], workBase: 1, workCount: 1,
+    variantIdx: isKid ? 1 + spriteIdx++ : 0,
     x: sx, y: sy, lastFile: null,
     state: 'idle', queue: [], path: [], seg: 0, segT: 0,
-    remaining: 0, vel: 0, animT: 0, workT: 0, frame: 0,
+    remaining: 0, vel: 0, animT: 0, workT: 0, frame: -1,
     dwellUntil: 0, lastActive: performance.now(), returning: false,
     gait: isKid ? 1.35 : 1,   // kids scurry
     moveTo(x, y) { this.x = x; this.y = y; g.setAttribute('transform', `translate(${x} ${y})`); },
     setFrame(i) {
       if (i === this.frame) return;
       this.frame = i;
-      frames.forEach((f, j) => f.setAttribute('visibility', j === i ? 'visible' : 'hidden'));
+      this.frames.forEach((f, j) => f.setAttribute('visibility', j === i ? 'visible' : 'hidden'));
     },
     face(dir) { flip.setAttribute('transform', dir < 0 ? 'scale(-1 1)' : 'scale(1 1)'); },
     setPose(lean, bob) {
-      pose.setAttribute('transform', `translate(0 ${bob.toFixed(2)}) rotate(${lean.toFixed(2)} 0 -17)`);
+      pose.setAttribute('transform', `translate(0 ${bob.toFixed(2)}) rotate(${lean.toFixed(2)} 0 -34)`);
     },
     say(verbText, verbClass, file) {
       bubbleText.replaceChildren();
@@ -400,6 +651,7 @@ function makeAgent(id) {
       this.sayTimer = setTimeout(() => bubble.setAttribute('visibility', 'hidden'), 3000);
     },
   };
+  rebuildSprite(a);
   a.moveTo(sx, sy);
   agents.set(id, a);
   return a;
@@ -459,7 +711,7 @@ function arrive(a) {
   a.lastActive = performance.now();
   a.vel = 0;
   a.workT = 0;
-  a.setFrame(SIT_FRAMES[0]);   // sit down, bring out the wrench
+  a.setFrame(a.workBase);   // sit down, bring out the tool
   a.setPose(0, 0);
   a.say(job.verbText, job.verbClass, job.file);
 
@@ -505,15 +757,15 @@ function tick(ts) {
         if (dir) a.face(dir);
         const rate = (a.vel / SPEED) * a.gait;
         a.animT += dt * rate;
-        a.setFrame(RUN_CYCLE[Math.floor(a.animT * RUN_FPS) % RUN_CYCLE.length]);
+        a.setFrame(a.runCycle[Math.floor(a.animT * RUN_FPS) % a.runCycle.length]);
         const lean = 8 * Math.min(1, a.vel / SPEED);
-        const bob = -Math.abs(Math.sin(a.animT * RUN_FPS * Math.PI / 2)) * 2.2;
+        const bob = -Math.abs(Math.sin(a.animT * RUN_FPS * Math.PI / 2)) * 4.4;
         a.setPose(lean, bob);
         a.moveTo(p0.x + (p1.x - p0.x) * a.segT, p0.y + (p1.y - p0.y) * a.segT);
       }
     } else if (a.state === 'working') {
       a.workT += dt;
-      a.setFrame(SIT_FRAMES[Math.floor(a.workT * WORK_FPS) % SIT_FRAMES.length]);
+      a.setFrame(a.workBase + Math.floor(a.workT * WORK_FPS) % a.workCount);
       if (performance.now() > a.dwellUntil) {
         a.state = 'idle';
         a.setFrame(0);
@@ -565,6 +817,36 @@ function connect() {
     handleActivity(ev);
   };
 }
+
+/* ---------- character picker ---------- */
+function miniSprite(def) {
+  const s = el('svg', { width: 38, height: 46, viewBox: '-27 -70 54 74' });
+  buildFrame(el('g', {}, s), def.grids.stand, def.colors);
+  return s;
+}
+function applyCharacter(key) {
+  charKey = key;
+  localStorage.setItem('agentview-char', key);
+  pickBtn.replaceChildren(miniSprite(CHARACTERS[key]));
+  document.querySelectorAll('.pickOpt').forEach(b => b.classList.toggle('selected', b.dataset.key === key));
+  for (const a of agents.values()) rebuildSprite(a);
+}
+const pickBtn = document.getElementById('pickBtn');
+const pickMenu = document.getElementById('pickMenu');
+for (const [key, def] of Object.entries(CHARACTERS)) {
+  const b = document.createElement('button');
+  b.className = 'pickOpt' + (key === charKey ? ' selected' : '');
+  b.dataset.key = key;
+  b.appendChild(miniSprite(def));
+  const nm = document.createElement('span');
+  nm.className = 'nm';
+  nm.textContent = def.name;
+  b.appendChild(nm);
+  b.onclick = () => { applyCharacter(key); pickMenu.classList.remove('open'); };
+  pickMenu.appendChild(b);
+}
+pickBtn.replaceChildren(miniSprite(CHARACTERS[charKey]));
+pickBtn.onclick = () => pickMenu.classList.toggle('open');
 
 refreshMap().then(() => {
   const root = hubs.get('');
