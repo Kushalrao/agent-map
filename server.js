@@ -13,8 +13,8 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
-const PORT = process.env.PORT || 4517;
-const WATCH_DIR = path.resolve(process.argv[2] || process.cwd());
+const PORT = process.env.PORT || process.env.AGENTVIEW_PORT || 4517;
+let WATCH_DIR = path.resolve(process.argv[2] || process.cwd());
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const IGNORE = new Set([
@@ -56,18 +56,25 @@ function buildTree(absDir, relDir = '', depth = 0, counter = { n: 0 }) {
 
 /* ---------------- fs.watch fallback ---------------- */
 const recentHookFiles = new Map(); // rel path -> timestamp, to suppress duplicate fs events
-try {
-  fs.watch(WATCH_DIR, { recursive: true }, (event, filename) => {
-    if (!filename) return;
-    const rel = filename.split(path.sep).join('/');
-    if (rel.split('/').some((seg) => IGNORE.has(seg) || (seg.startsWith('.') && seg !== '.claude'))) return;
-    const hookTs = recentHookFiles.get(rel);
-    if (hookTs && Date.now() - hookTs < 3000) return; // hook already reported this, skip noise
-    broadcast({ type: 'activity', source: 'fs', agent: 'fs-watcher', tool: 'FsChange', file: rel, ts: Date.now() });
-  });
-} catch (err) {
-  console.error('fs.watch unavailable:', err.message);
+let watcher = null;
+function startWatching(dir) {
+  if (watcher) { try { watcher.close(); } catch {} watcher = null; }
+  WATCH_DIR = dir;
+  recentHookFiles.clear();
+  try {
+    watcher = fs.watch(WATCH_DIR, { recursive: true }, (event, filename) => {
+      if (!filename) return;
+      const rel = filename.split(path.sep).join('/');
+      if (rel.split('/').some((seg) => IGNORE.has(seg) || (seg.startsWith('.') && seg !== '.claude'))) return;
+      const hookTs = recentHookFiles.get(rel);
+      if (hookTs && Date.now() - hookTs < 3000) return; // hook already reported this, skip noise
+      broadcast({ type: 'activity', source: 'fs', agent: 'fs-watcher', tool: 'FsChange', file: rel, ts: Date.now() });
+    });
+  } catch (err) {
+    console.error('fs.watch unavailable:', err.message);
+  }
 }
+startWatching(WATCH_DIR);
 
 /* ---------------- http ---------------- */
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
@@ -90,6 +97,24 @@ const server = http.createServer((req, res) => {
   if (url.pathname === '/tree') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(buildTree(WATCH_DIR)));
+    return;
+  }
+
+  if (url.pathname === '/watch' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (d) => { body += d; if (body.length > 1e5) req.destroy(); });
+    req.on('end', () => {
+      try {
+        const dir = path.resolve(JSON.parse(body).dir || '');
+        if (dir && fs.existsSync(dir) && dir !== WATCH_DIR) {
+          console.log('rewatching', dir);
+          startWatching(dir);
+          broadcast({ type: 'rewatch', watchDir: WATCH_DIR });
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true, watchDir: WATCH_DIR }));
+      } catch { res.writeHead(400); res.end('bad json'); }
+    });
     return;
   }
 

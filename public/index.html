@@ -560,6 +560,7 @@ function connect() {
   es.onmessage = (m) => {
     const ev = JSON.parse(m.data);
     if (ev.type === 'hello') { document.getElementById('watchdir').textContent = ev.watchDir; return; }
+    if (ev.type === 'rewatch') { location.reload(); return; }
     if (ev.type !== 'activity' || !ev.file) return;
     handleActivity(ev);
   };

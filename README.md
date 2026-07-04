@@ -18,22 +18,34 @@ Out of the box it reacts to **raw filesystem changes** (any agent, any editor) v
 `fs.watch`. For richer, real-time signal — including *reads*, per-session avatars,
 and events the moment the agent decides to touch a file — install the Claude Code hook:
 
-## Claude Code hook (recommended)
+## Run automatically with every Claude Code session (recommended)
 
-Add to `~/.claude/settings.json` for all projects, or `<project>/.claude/settings.json`
-for one project:
+Add to `~/.claude/settings.json` (adjust the paths to where you cloned this repo):
 
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /ABSOLUTE/PATH/agent-map/autostart.js",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit|Read",
         "hooks": [
           {
             "type": "command",
-            "command": "node /Users/kushalyadav/agentview/hook.js",
-            "timeout": 5
+            "command": "node /ABSOLUTE/PATH/agent-map/hook.js",
+            "timeout": 5,
+            "async": true
           }
         ]
       }
@@ -42,9 +54,16 @@ for one project:
 }
 ```
 
-The hook fires *before* each file tool runs, POSTs `{session, tool, file}` to
-`http://127.0.0.1:4517/event`, and always exits 0 within ~1.5s — so it never
-slows down or blocks the agent, even when the server isn't running.
+- **`autostart.js`** (SessionStart): if the server isn't running, starts it
+  watching the session's project and opens the browser; if it is running,
+  re-points it at the new session's project (open tabs reload automatically).
+- **`hook.js`** (PreToolUse): fires *before* each file tool runs, POSTs
+  `{session, tool, file}` to `http://127.0.0.1:4517/event`, and always exits 0
+  within ~1.5s — it never slows down or blocks the agent, even when the server
+  isn't running.
+
+Both hooks are `async`, so they add zero latency to your sessions. Hook changes
+apply to sessions started after the edit.
 
 ## How it works
 
