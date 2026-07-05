@@ -114,6 +114,13 @@
   @keyframes sway { from { transform: rotate(-1.6deg); } to { transform: rotate(2.2deg); } }
   .roam { animation: roam var(--dur, 60s) ease-in-out infinite alternate; animation-delay: var(--delay, 0s); }
   @keyframes roam { from { transform: translate(0, 0); } to { transform: translate(var(--dx, 0px), var(--dy, 0px)); } }
+  /* the city builds itself: towers spring up from their lots */
+  .rise {
+    animation: rise 0.85s cubic-bezier(0.22, 1.5, 0.42, 1) backwards;
+    transform-box: fill-box; transform-origin: 50% 100%;
+  }
+  @keyframes rise { from { transform: scaleY(0.02); } 70% { transform: scaleY(1.06); } to { transform: scaleY(1); } }
+  @keyframes fadein { from { opacity: 0; } }
 
   .agent { transition: opacity 0.3s; }
   /* halo keeps agents readable even when they pass behind a building */
@@ -986,6 +993,10 @@ function buildMap(root) {
   svg = el('svg', { width, height, viewBox: `0 0 ${width} ${height}` });
   mapwrap.appendChild(svg);
 
+  riseKeys = INTRO ? 'all' : new Set(dirs.filter(d => !knownDirs.has(d.key)).map(d => d.key));
+  knownDirs = new Set(dirs.map(d => d.key));
+  if (INTRO) svg.style.animation = 'fadein 0.45s ease-out backwards';
+
   drawGround(width, height, spanX, spanY, cols, rows, N);
 
   // lots in painter's order: back of the scene first, valid at any azimuth
@@ -996,9 +1007,10 @@ function buildMap(root) {
   lots.sort((a, b) =>
     isoS(a.gx * PITCH_X + W_ISO / 2, a.gy * PITCH_Y + D_ISO / 2).y -
     isoS(b.gx * PITCH_X + W_ISO / 2, b.gy * PITCH_Y + D_ISO / 2).y);
+  let seq = 0;
   for (const { it, gx, gy } of lots) {
     if (it.park) drawParkLot(gx, gy, N);
-    else drawBuildingIso(it, colorOf.get(it), gx, gy, N);
+    else drawBuildingIso(it, colorOf.get(it), gx, gy, N, seq++);
   }
 
   drawWeather(width, height, spanX, spanY, N);
@@ -1237,10 +1249,11 @@ function drawWeather(w, h, spanX, spanY, N) {
   }
 }
 
-function drawBuildingIso(b, i, gx, gy, N) {
+function drawBuildingIso(b, i, gx, gy, N, seq) {
   const bx = gx * PITCH_X, by = gy * PITCH_Y;
   const floors = b.files.length;
   const H = LOBBY_HZ + floors * FLOOR_HZ + 8;
+  const rising = riseKeys === 'all' || (riseKeys && riseKeys.has(b.key));
   let wall = WALLS[i % WALLS.length];
   if (N) wall = shade(wall, 0.8, 0.45);
   const faceR = shade(wall, 1.02, N ? 0.55 : 0.68);
@@ -1248,6 +1261,11 @@ function drawBuildingIso(b, i, gx, gy, N) {
   if (N) roof = shade(roof, 0.75, 0.5);
   const trim = shade(wall, 1.05, N ? 0.78 : 0.72);
   const g = el('g', {}, svg);
+  if (rising) {
+    g.setAttribute('class', 'rise');
+    g.style.animationDelay = `${(0.25 + (seq || 0) * 0.07).toFixed(2)}s`;
+    g.style.animationDuration = `${(0.75 + rnd(i * 13) * 0.45).toFixed(2)}s`;
+  }
   el('title', {}, g).textContent = b.full;
 
   const { A, B, C, D } = cornersOf(bx, by, W_ISO, D_ISO);
@@ -1403,6 +1421,10 @@ function drawFloorIso(g, bi, fi, f, PF, PR, ctx, N) {
     glow, wins, label,
   };
 }
+
+let INTRO = true;              // first build plays the construction sequence
+let knownDirs = new Set();     // later, only brand-new buildings rise
+let riseKeys = null;
 
 let treeCache = null;
 async function refreshMap() {
@@ -1804,6 +1826,7 @@ refreshMap().then(() => {
     left: SPAWN.x - mapwrap.clientWidth / 3,
     top: SPAWN.y - mapwrap.clientHeight / 2,
   });
+  setTimeout(() => { INTRO = false; }, 3000);   // after the construction show, only new buildings rise
   connect();
 });
 </script>
