@@ -142,16 +142,15 @@ const SVGNS = 'http://www.w3.org/2000/svg';
 const mapwrap = document.getElementById('mapwrap');
 const statusEl = document.getElementById('status');
 
-/* ---- city constants: a building per folder, a floor per file ---- */
-const FLOOR_H = 26;      // one file = one floor
-const LOBBY_H = 34;      // ground floor with door, awning + folder sign
-const BW = 122;          // building width (front facade)
-const DEPTH = 22;        // isometric depth: side wall extends up-right
-const DEPTH_Y = 12;      // vertical rise of the depth vector
-const GAPB = 46;         // gap between buildings (side wall + ladder alley)
-const GAPBLOCK = 170;    // park gap between top-level blocks
-const STREET_H = 104;    // sidewalk + road below the ground line
-const SKY_PAD = 260;     // sky headroom above the tallest tower
+/* ---- top-down cartoon city: an isometric grid of blocks ---- */
+const K = 30, K2 = 15;   // iso axes: +x → screen (K, K2), +y → screen (-K, K2)
+const W_ISO = 3.4;       // building footprint width (iso units)
+const D_ISO = 2.6;       // building footprint depth
+const S_ISO = 1.7;       // street width
+const PITCH_X = W_ISO + S_ISO;
+const PITCH_Y = D_ISO + S_ISO;
+const FLOOR_HZ = 18;     // elevation px per floor
+const LOBBY_HZ = 22;     // ground-floor band height
 
 /* ---- motion constants ---- */
 const SPEED = 120;     // cruise speed, px/s
@@ -887,19 +886,31 @@ const frameRows = def => {
 };
 
 let svg = null;
-let stations = new Map();  // file path -> {perchX, floorY, ladderX, glow, wins, label}
+let stations = new Map();  // file path -> {streetIso, vx, base, wallFoot, ladderTop, perch, wayDown, glow, wins, label}
 let agents = new Map();
 let agentLayer = null;
-let GROUND = 600;          // y of the sidewalk agents run on
-let CITY = { spawnX: 90, width: 1200, height: 700 };
+let OX = 0, OY = 0;        // iso origin on the canvas
+const isoS = (ix, iy) => ({ x: OX + (ix - iy) * K, y: OY + (ix + iy) * K2 });
+let SPAWN = { iso: { x: -1, y: PITCH_Y - S_ISO / 2 }, x: 120, y: 400 };
 
 /* deterministic pseudo-random so the scenery is stable across rebuilds */
 const rnd = n => { const x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); };
 const night = () => document.documentElement.classList.contains('dark');
 const shade = (hex, sMul, lMul) => { const [h, s, l] = hexHsl(hex); return hslHex(h, Math.min(1, s * sMul), Math.min(1, l * lMul)); };
+const P = pts => pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
 
 /* warm cartoon-city wall palette */
 const WALLS = ['#E8654A', '#F2A055', '#6FA8B8', '#E8C177', '#9B8FC0', '#D98A8A', '#8FB98B', '#7FA3D1', '#D9A17E', '#C97FA8'];
+
+/* draw an isometric box: roof + the two camera-facing walls */
+function isoBox(g, x0, y0, wx, wy, hb, ht, cTop, cLeft, cRight) {
+  const A = isoS(x0, y0), B = isoS(x0 + wx, y0), C = isoS(x0 + wx, y0 + wy), D = isoS(x0, y0 + wy);
+  const up = (v, h) => ({ x: v.x, y: v.y - h });
+  el('polygon', { points: P([up(A, ht), up(B, ht), up(C, ht), up(D, ht)]), fill: cTop }, g);
+  el('polygon', { points: P([up(D, ht), up(C, ht), up(C, hb), up(D, hb)]), fill: cLeft }, g);
+  el('polygon', { points: P([up(C, ht), up(B, ht), up(B, hb), up(C, hb)]), fill: cRight }, g);
+  return { A, B, C, D };
+}
 
 /* ---------- the city: every folder a building, every file a floor ---------- */
 function flattenDirs(root) {
@@ -917,257 +928,350 @@ function flattenDirs(root) {
 function buildMap(root) {
   const dirs = flattenDirs(root);
   const N = night();
-  const maxFloors = Math.max(1, ...dirs.map(d => d.files.length));
-  const cityH = LOBBY_H + maxFloors * FLOOR_H + 100;
-  const height = Math.max(SKY_PAD + cityH + STREET_H, mapwrap.clientHeight);
-  GROUND = height - STREET_H;
 
-  // lay buildings along the street; a park separates top-level blocks
-  let x = 190;
-  const placed = [], parks = [];
+  // interleave park lots between top-level blocks
+  const items = [];
   let lastTop = null;
   for (const d of dirs) {
     const topKey = d.key === '' ? '/' : d.key.split('/')[0];
-    if (lastTop !== null && topKey !== lastTop) { parks.push(x + 6); x += GAPBLOCK; }
+    if (lastTop !== null && topKey !== lastTop) items.push({ park: true });
     lastTop = topKey;
-    placed.push({ ...d, x });
-    x += BW + GAPB;
+    items.push(d);
   }
-  const width = Math.max(x + 280, mapwrap.clientWidth);
+  const cols = Math.max(3, Math.ceil(Math.sqrt(items.length * 1.4)));
+  const rows = Math.max(1, Math.ceil(items.length / cols));
+  const maxFloors = Math.max(1, ...dirs.map(d => d.files.length));
+  const maxH = LOBBY_HZ + maxFloors * FLOOR_HZ + 70;
+
+  const spanX = cols * PITCH_X, spanY = rows * PITCH_Y;
+  OX = (spanY + S_ISO) * K + 160;
+  OY = maxH + 160;
+  const width = Math.max(OX + (spanX + S_ISO) * K + 160, mapwrap.clientWidth);
+  const height = Math.max(OY + (spanX + spanY + 2 * S_ISO) * K2 + 120, mapwrap.clientHeight);
 
   const oldAgents = [...agents.values()];
   stations = new Map();
   mapwrap.replaceChildren();
   svg = el('svg', { width, height, viewBox: `0 0 ${width} ${height}` });
   mapwrap.appendChild(svg);
-  CITY = { spawnX: 96, width, height };
 
-  drawSky(width, height, N);
-  drawBackdrop(width, N);
-  drawStreet(width, height, N);
-  for (const px of parks) drawPark(px, N);
-  placed.forEach((b, i) => drawBuilding(b, i, N));
+  drawGround(width, height, spanX, spanY, cols, rows, N);
+
+  // lots in painter's order: back of the scene first
+  const lots = items.map((it, idx) => ({ it, gx: idx % cols, gy: Math.floor(idx / cols) }));
+  const colorOf = new Map();
+  let ci = 0;
+  for (const it of items) if (!it.park) colorOf.set(it, ci++);
+  lots.sort((a, b) => (a.gx + a.gy) - (b.gx + b.gy) || a.gx - b.gx);
+  for (const { it, gx, gy } of lots) {
+    if (it.park) drawParkLot(gx, gy, N);
+    else drawBuildingIso(it, colorOf.get(it), gx, gy, N);
+  }
+
+  drawWeather(width, height, spanX, spanY, N);
+
+  SPAWN.iso = { x: -1, y: PITCH_Y - S_ISO / 2 };
+  const sp = isoS(SPAWN.iso.x, SPAWN.iso.y);
+  SPAWN.x = sp.x; SPAWN.y = sp.y;
 
   agentLayer = el('g', {}, svg);
   for (const a of oldAgents) {
     agentLayer.appendChild(a.g);
     const st = a.lastFile && stations.get(a.lastFile);
-    if (st && a.state === 'working') { a.x = st.perchX; a.y = st.floorY; a.ladderX = st.ladderX; }
-    else { a.x = Math.min(a.x, width - 60); a.y = GROUND; }
+    if (st && a.state === 'working') {
+      a.x = st.perch.x; a.y = st.perch.y;
+      a.aloft = true; a.wayDown = st.wayDown.slice(); a.iso = { ...st.streetIso };
+    } else {
+      a.iso = a.iso || { ...SPAWN.iso };
+      const p = isoS(a.iso.x, a.iso.y);
+      a.x = p.x; a.y = p.y; a.aloft = false; a.wayDown = null;
+    }
     a.moveTo(a.x, a.y);
   }
 }
 
-function drawSky(w, h, N) {
-  const defs = el('defs', {}, svg);
-  const grad = el('linearGradient', { id: 'sky', x1: 0, y1: 0, x2: 0, y2: 1 }, defs);
-  const stops = N
-    ? [['0%', '#0E1526'], ['70%', '#1D2B45'], ['100%', '#2E3A55']]
-    : [['0%', '#8FD0F0'], ['60%', '#BEE3F5'], ['100%', '#F2EAD8']];
-  for (const [o, c] of stops) el('stop', { offset: o, 'stop-color': c }, grad);
-  el('rect', { x: 0, y: 0, width: w, height: h, fill: 'url(#sky)' }, svg);
+function drawGround(w, h, spanX, spanY, cols, rows, N) {
+  // grass world, paved plaza, street grid
+  el('rect', { x: 0, y: 0, width: w, height: h, fill: N ? '#16281E' : '#8FBF6B' }, svg);
+  const gx0 = -S_ISO, gx1 = spanX, gy0 = -S_ISO, gy1 = spanY;
+  el('polygon', { points: P([isoS(gx0 - 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy1 + 0.6), isoS(gx0 - 0.6, gy1 + 0.6)]), fill: N ? '#2C3140' : '#D8D2C4' }, svg);
 
-  if (N) {
-    for (let i = 0; i < w / 16; i++) {
-      el('circle', {
-        cx: rnd(i) * w, cy: rnd(i + 999) * (GROUND - 340),
-        r: rnd(i + 55) * 1.3 + 0.4, fill: '#E8F0FF', opacity: (0.3 + rnd(i + 7) * 0.6).toFixed(2),
-      }, svg);
+  const asph = N ? '#20242F' : '#6E7683';
+  const dash = N ? '#7A8296' : '#F2E9C8';
+  for (let gy = 0; gy <= rows; gy++) {
+    const y0 = gy * PITCH_Y - S_ISO;
+    el('polygon', { points: P([isoS(gx0, y0), isoS(gx1, y0), isoS(gx1, y0 + S_ISO), isoS(gx0, y0 + S_ISO)]), fill: asph }, svg);
+    const cy = y0 + S_ISO / 2;
+    for (let ix = 0; ix < spanX; ix += 1.5) {
+      el('polygon', { points: P([isoS(ix, cy - 0.05), isoS(ix + 0.65, cy - 0.05), isoS(ix + 0.65, cy + 0.05), isoS(ix, cy + 0.05)]), fill: dash }, svg);
     }
-    el('circle', { cx: 260, cy: 130, r: 36, fill: '#F2EFD9' }, svg);
-    el('circle', { cx: 248, cy: 120, r: 7, fill: '#DCD9C0' }, svg);
-    el('circle', { cx: 274, cy: 142, r: 5, fill: '#DCD9C0' }, svg);
-    el('circle', { cx: 260, cy: 150, r: 3.5, fill: '#DCD9C0' }, svg);
-  } else {
-    const sx = 260, sy = 140;
-    for (let i = 0; i < 8; i++) {
-      const ang = i * Math.PI / 4;
-      el('line', {
-        x1: sx + Math.cos(ang) * 54, y1: sy + Math.sin(ang) * 54,
-        x2: sx + Math.cos(ang) * 72, y2: sy + Math.sin(ang) * 72,
-        stroke: '#FFD34D', 'stroke-width': 6, 'stroke-linecap': 'round',
-      }, svg);
+  }
+  for (let gx = 0; gx <= cols; gx++) {
+    const x0 = gx * PITCH_X - S_ISO;
+    el('polygon', { points: P([isoS(x0, gy0), isoS(x0 + S_ISO, gy0), isoS(x0 + S_ISO, gy1), isoS(x0, gy1)]), fill: asph }, svg);
+    const cx = x0 + S_ISO / 2;
+    for (let iy = 0; iy < spanY; iy += 1.5) {
+      el('polygon', { points: P([isoS(cx - 0.05, iy), isoS(cx + 0.05, iy), isoS(cx + 0.05, iy + 0.65), isoS(cx - 0.05, iy + 0.65)]), fill: dash }, svg);
     }
-    el('circle', { cx: sx, cy: sy, r: 42, fill: '#FFD34D' }, svg);
-    el('circle', { cx: sx, cy: sy, r: 33, fill: '#FFE28A' }, svg);
   }
-
-  for (let i = 0; i < Math.max(3, w / 480); i++) {
-    const cx = 150 + rnd(i * 3 + 1) * (w - 300), cy = 60 + rnd(i * 7 + 2) * 170;
-    const col = N ? '#26334D' : '#FFFFFF';
-    const op = N ? 0.8 : 0.95;
-    const c = el('g', { class: 'cloud', style: `animation-duration:${70 + rnd(i) * 60}s; animation-delay:-${rnd(i + 3) * 60}s` }, svg);
-    el('ellipse', { cx, cy, rx: 48, ry: 17, fill: col, opacity: op }, c);
-    el('ellipse', { cx: cx - 28, cy: cy + 6, rx: 26, ry: 12, fill: col, opacity: op }, c);
-    el('ellipse', { cx: cx + 30, cy: cy + 7, rx: 30, ry: 13, fill: col, opacity: op }, c);
-  }
-}
-
-function drawBackdrop(w, N) {
-  const col = N ? '#222E48' : '#C4DCEA';
-  for (let i = 0; i < w / 88; i++) {
-    const bw = 52 + rnd(i + 21) * 60, bh = 130 + rnd(i + 43) * 230;
-    const bx = i * 88 + rnd(i) * 30;
-    el('rect', { x: bx, y: GROUND - bh, width: bw, height: bh, fill: col, opacity: 0.55 }, svg);
-    if (N && rnd(i + 5) > 0.35) {
-      for (let j = 0; j < 6; j++) {
-        el('rect', {
-          x: bx + 6 + rnd(i * 9 + j) * (bw - 14), y: GROUND - bh + 12 + rnd(i * 7 + j * 3) * (bh - 34),
-          width: 4, height: 5, fill: '#FFD98A', opacity: 0.55,
-        }, svg);
+  // crosswalks + manholes + corner lamps
+  const zebra = N ? '#8A93A6' : '#F2EFE4';
+  for (let gy = 0; gy <= rows; gy++) {
+    for (let gx = 0; gx < cols; gx++) {
+      if (rnd(gx * 7 + gy * 13) < 0.45) continue;
+      const y0 = gy * PITCH_Y - S_ISO;
+      for (let s = 0; s < 4; s++) {
+        const x0 = gx * PITCH_X + 0.3 + s * 0.42;
+        el('polygon', { points: P([isoS(x0, y0 + 0.18), isoS(x0 + 0.24, y0 + 0.18), isoS(x0 + 0.24, y0 + S_ISO - 0.18), isoS(x0, y0 + S_ISO - 0.18)]), fill: zebra, opacity: 0.9 }, svg);
+      }
+      if (rnd(gx * 3 + gy * 11 + 5) > 0.7) {
+        const m = isoS(gx * PITCH_X + 1.8, y0 + S_ISO / 2 + 0.3);
+        el('ellipse', { cx: m.x, cy: m.y, rx: 7, ry: 3.5, fill: N ? '#161A24' : '#575E6B' }, svg);
       }
     }
   }
-}
-
-function drawStreet(w, h, N) {
-  el('rect', { x: 0, y: GROUND, width: w, height: 26, fill: N ? '#3A4152' : '#D9D3C8' }, svg);
-  el('rect', { x: 0, y: GROUND, width: w, height: 4, fill: N ? '#4A5266' : '#EBE6DC' }, svg);
-  const roadY = GROUND + 26, roadH = h - roadY;
-  el('rect', { x: 0, y: roadY, width: w, height: roadH, fill: N ? '#232936' : '#5F6673' }, svg);
-  for (let dx = 20; dx < w; dx += 72) {
-    el('rect', { x: dx, y: roadY + roadH / 2 - 3, width: 36, height: 6, rx: 3, fill: N ? '#8A93A6' : '#F2E9C8' }, svg);
+  for (let gy = 0; gy <= rows; gy++) {
+    for (let gx = 0; gx <= cols; gx++) {
+      if ((gx + gy) % 2) continue;
+      const p = isoS(gx * PITCH_X + 0.12, gy * PITCH_Y + 0.12);
+      el('rect', { x: p.x - 2, y: p.y - 50, width: 4, height: 50, fill: '#3A4152' }, svg);
+      el('circle', { cx: p.x, cy: p.y - 54, r: 5.5, fill: N ? '#FFE28A' : '#D9DEE8' }, svg);
+      if (N) el('circle', { cx: p.x, cy: p.y - 54, r: 15, fill: '#FFE28A', opacity: 0.16 }, svg);
+    }
   }
-  for (let i = 0; i < w / 620; i++) {
-    const cx = 320 + i * 620 + rnd(i + 77) * 220;
-    drawCar(cx, roadY + 26, WALLS[Math.floor(rnd(i + 13) * WALLS.length)], rnd(i + 2) > 0.5, N);
+  // parked cars scattered on the grid
+  const nCars = Math.round(cols * rows * 0.8) + 2;
+  for (let i = 0; i < nCars; i++) {
+    const col = WALLS[Math.floor(rnd(i + 13) * WALLS.length)];
+    if (rnd(i) > 0.5) {
+      const gy = Math.floor(rnd(i + 31) * (rows + 1));
+      drawCarIso(rnd(i + 7) * (spanX - 2), gy * PITCH_Y - S_ISO / 2 - 0.28, 'x', col, N);
+    } else {
+      const gx = Math.floor(rnd(i + 47) * (cols + 1));
+      drawCarIso(gx * PITCH_X - S_ISO / 2 + 0.28, rnd(i + 9) * (spanY - 2), 'y', col, N);
+    }
   }
 }
 
-function drawCar(x, y, col, flipped, N) {
-  const g = el('g', { transform: `translate(${x} ${y})${flipped ? ' scale(-1 1)' : ''}` }, svg);
-  const body = N ? shade(col, 0.8, 0.5) : col;
-  el('rect', { x: -34, y: -14, width: 68, height: 16, rx: 8, fill: body }, g);
-  el('rect', { x: -18, y: -27, width: 35, height: 16, rx: 7, fill: body }, g);
-  el('rect', { x: -14, y: -24, width: 12, height: 10, rx: 3, fill: N ? '#FFE9AE' : '#CFE8F7' }, g);
-  el('rect', { x: 3, y: -24, width: 11, height: 10, rx: 3, fill: N ? '#FFE9AE' : '#CFE8F7' }, g);
-  el('circle', { cx: -20, cy: 4, r: 7, fill: '#2B2F3A' }, g);
-  el('circle', { cx: 20, cy: 4, r: 7, fill: '#2B2F3A' }, g);
-  el('circle', { cx: -20, cy: 4, r: 3, fill: '#8A93A6' }, g);
-  el('circle', { cx: 20, cy: 4, r: 3, fill: '#8A93A6' }, g);
-}
-
-function drawPark(x, N) {
-  drawTree(x + 34, GROUND, 1 + rnd(x) * 0.35, N);
-  drawBush(x + 92, GROUND, N);
-  drawLamp(x + 124, GROUND, N);
-}
-function drawTree(x, gy, s, N) {
-  const g = el('g', { transform: `translate(${x} ${gy}) scale(${s})` }, svg);
-  el('rect', { x: -5, y: -48, width: 10, height: 48, rx: 3, fill: N ? '#4A3A2E' : '#8B6142' }, g);
-  const leaf = N ? '#2E4A3C' : '#9CCB6B', leaf2 = N ? '#3A5C4A' : '#B7DC8B';
-  el('circle', { cx: 0, cy: -68, r: 27, fill: leaf }, g);
-  el('circle', { cx: -19, cy: -53, r: 18, fill: leaf }, g);
-  el('circle', { cx: 19, cy: -53, r: 18, fill: leaf }, g);
-  el('circle', { cx: 0, cy: -62, r: 14, fill: leaf2 }, g);
-}
-function drawBush(x, gy, N) {
-  el('ellipse', { cx: x, cy: gy - 8, rx: 21, ry: 11, fill: N ? '#2E4A3C' : '#9CCB6B' }, svg);
-  el('ellipse', { cx: x + 15, cy: gy - 6, rx: 12, ry: 8, fill: N ? '#3A5C4A' : '#B7DC8B' }, svg);
-}
-function drawLamp(x, gy, N) {
-  el('rect', { x: x - 2, y: gy - 66, width: 4, height: 66, fill: '#3A4152' }, svg);
-  el('circle', { cx: x, cy: gy - 70, r: 6, fill: N ? '#FFE28A' : '#D9DEE8' }, svg);
-  if (N) el('circle', { cx: x, cy: gy - 70, r: 16, fill: '#FFE28A', opacity: 0.16 }, svg);
-}
-
-function drawBuilding(b, i, N) {
-  const x = b.x, w = BW, floors = b.files.length;
-  const hgt = LOBBY_H + floors * FLOOR_H + 10;
-  const top = GROUND - hgt;
-  const D = DEPTH, DY = DEPTH_Y;
-  let wall = WALLS[i % WALLS.length];
-  if (N) wall = shade(wall, 0.78, 0.42);
-  const trim = shade(wall, 1.05, N ? 0.72 : 0.7);
-  const sideCol = shade(wall, 1.02, N ? 0.52 : 0.62);   // shadowed side wall
-  const roofCol = shade(wall, 0.75, N ? 0.6 : 1.16);
+function drawCarIso(ix, iy, axis, col, N) {
+  const wx = axis === 'x' ? 1.25 : 0.6, wy = axis === 'x' ? 0.6 : 1.25;
+  const body = N ? shade(col, 0.85, 0.5) : col;
+  const dark = shade(body, 1, 0.7), darker = shade(body, 1, 0.55);
+  const c = isoS(ix + wx / 2, iy + wy / 2);
+  el('ellipse', { cx: c.x, cy: c.y + 3, rx: (wx + wy) * 14, ry: (wx + wy) * 6, fill: '#2B3345', opacity: 0.18 }, svg);
   const g = el('g', {}, svg);
+  isoBox(g, ix, iy, wx, wy, 2, 13, body, dark, darker);
+  const inx = axis === 'x' ? 0.28 : 0.1, iny = axis === 'x' ? 0.1 : 0.28;
+  isoBox(g, ix + inx, iy + iny, wx - 2 * inx, wy - 2 * iny, 13, 22, shade(body, 1, 1.12), N ? '#FFE9AE' : '#CFE8F7', N ? '#E8CE8E' : '#AFCFE4');
+  if (N) {
+    const f = isoS(ix + (axis === 'x' ? wx : wx / 2), iy + (axis === 'x' ? wy / 2 : wy));
+    el('circle', { cx: f.x, cy: f.y - 6, r: 8, fill: '#FFE9AE', opacity: 0.25 }, g);
+  }
+}
 
-  // isometric volume: side wall (up-right), roof plane, then the front facade
-  el('polygon', { points: `${x + w},${top} ${x + w + D},${top - DY} ${x + w + D},${GROUND - DY} ${x + w},${GROUND}`, fill: sideCol }, g);
-  el('polygon', { points: `${x},${top} ${x + w},${top} ${x + w + D},${top - DY} ${x + D},${top - DY}`, fill: roofCol }, g);
-  el('rect', { x, y: top, width: w, height: hgt, fill: wall }, g);
-  // parapet: front lip + top face
-  el('rect', { x: x - 4, y: top - 6, width: w + 8, height: 9, rx: 2, fill: trim }, g);
+function drawTreeAt(p, s, N) {
+  const g = el('g', { transform: `translate(${p.x} ${p.y}) scale(${s})` }, svg);
+  el('ellipse', { cx: 4, cy: 3, rx: 26, ry: 10, fill: '#2B3345', opacity: 0.15 }, g);
+  el('rect', { x: -4, y: -34, width: 8, height: 34, rx: 3, fill: N ? '#4A3A2E' : '#8B6142' }, g);
+  const leaf = N ? '#2E4A3C' : '#9CCB6B', leaf2 = N ? '#3A5C4A' : '#B7DC8B';
+  el('circle', { cx: 0, cy: -50, r: 22, fill: leaf }, g);
+  el('circle', { cx: -15, cy: -38, r: 14, fill: leaf }, g);
+  el('circle', { cx: 15, cy: -38, r: 14, fill: leaf }, g);
+  el('circle', { cx: 0, cy: -45, r: 11, fill: leaf2 }, g);
+}
+
+function drawParkLot(gx, gy, N) {
+  const bx = gx * PITCH_X, by = gy * PITCH_Y;
   el('polygon', {
-    points: `${x - 4},${top - 6} ${x + w + 4},${top - 6} ${x + w + 4 + D * 0.8},${top - 6 - DY * 0.8} ${x - 4 + D * 0.8},${top - 6 - DY * 0.8}`,
-    fill: shade(trim, 1, N ? 1.12 : 1.2),
+    points: P([isoS(bx + 0.1, by + 0.1), isoS(bx + W_ISO - 0.1, by + 0.1), isoS(bx + W_ISO - 0.1, by + D_ISO - 0.1), isoS(bx + 0.1, by + D_ISO - 0.1)]),
+    fill: N ? '#22402C' : '#9CCB6B',
+  }, svg);
+  const pond = isoS(bx + W_ISO * 0.62, by + D_ISO * 0.6);
+  el('ellipse', { cx: pond.x, cy: pond.y, rx: 26, ry: 12, fill: N ? '#22334D' : '#7FB8D9' }, svg);
+  el('ellipse', { cx: pond.x - 6, cy: pond.y - 2, rx: 8, ry: 3, fill: N ? '#31456B' : '#A8D4EC' }, svg);
+  drawTreeAt(isoS(bx + 0.7, by + 0.7), 1, N);
+  drawTreeAt(isoS(bx + W_ISO - 0.8, by + 0.9), 0.8, N);
+  drawTreeAt(isoS(bx + 1.1, by + D_ISO - 0.6), 0.9, N);
+  isoBox(svg, bx + 1.9, by + 1.9, 0.7, 0.22, 4, 10, N ? '#6E5A45' : '#B08A5F', N ? '#5A4A38' : '#96744E', N ? '#4A3D2E' : '#7E6242');
+}
+
+function drawWeather(w, h, spanX, spanY, N) {
+  if (N) {
+    el('circle', { cx: w - 220, cy: 130, r: 34, fill: '#F2EFD9' }, svg);
+    el('circle', { cx: w - 232, cy: 121, r: 7, fill: '#DCD9C0' }, svg);
+    el('circle', { cx: w - 208, cy: 141, r: 5, fill: '#DCD9C0' }, svg);
+    for (let i = 0; i < 40; i++) {
+      el('circle', { cx: rnd(i * 3) * w, cy: rnd(i * 7 + 1) * 160, r: rnd(i + 5) * 1.2 + 0.4, fill: '#E8F0FF', opacity: (0.3 + rnd(i) * 0.5).toFixed(2) }, svg);
+    }
+    return;
+  }
+  // drifting clouds with shadows on the city below
+  for (let i = 0; i < 4; i++) {
+    const gp = isoS(0.5 + rnd(i * 5 + 2) * spanX, 0.5 + rnd(i * 9 + 4) * spanY);
+    const sh = el('g', { class: 'cloud', style: `animation-duration:${80 + rnd(i) * 50}s; animation-delay:-${rnd(i + 3) * 60}s` }, svg);
+    el('ellipse', { cx: gp.x, cy: gp.y, rx: 95, ry: 34, fill: '#2B3345', opacity: 0.10 }, sh);
+    const cl = el('g', { class: 'cloud', style: `animation-duration:${80 + rnd(i) * 50}s; animation-delay:-${rnd(i + 3) * 60}s` }, svg);
+    const cx = gp.x - 90, cy = gp.y - 210;
+    el('ellipse', { cx, cy, rx: 52, ry: 19, fill: '#FFFFFF', opacity: 0.96 }, cl);
+    el('ellipse', { cx: cx - 30, cy: cy + 7, rx: 27, ry: 13, fill: '#FFFFFF', opacity: 0.96 }, cl);
+    el('ellipse', { cx: cx + 33, cy: cy + 8, rx: 31, ry: 14, fill: '#FFFFFF', opacity: 0.96 }, cl);
+  }
+  // the agentview blimp
+  const bl = el('g', { class: 'cloud', style: 'animation-duration:140s' }, svg);
+  const bx = w * 0.32, by = 110;
+  el('ellipse', { cx: bx, cy: by, rx: 64, ry: 21, fill: '#E86A5A' }, bl);
+  el('ellipse', { cx: bx, cy: by - 6, rx: 60, ry: 12, fill: '#F2938A', opacity: 0.7 }, bl);
+  el('polygon', { points: `${bx - 70},${by - 14} ${bx - 52},${by} ${bx - 70},${by + 10}`, fill: '#C94B3E' }, bl);
+  el('rect', { x: bx - 12, y: by + 18, width: 26, height: 9, rx: 4, fill: '#5A5F6B' }, bl);
+  // birds
+  for (let i = 0; i < 3; i++) {
+    const px = 300 + rnd(i * 11) * (w - 600), py = 90 + rnd(i * 13 + 2) * 120;
+    el('path', { d: `M ${px} ${py} q 7 -7 14 0 q 7 -7 14 0`, stroke: '#3A4152', 'stroke-width': 2.4, fill: 'none', 'stroke-linecap': 'round' }, svg);
+  }
+}
+
+function drawBuildingIso(b, i, gx, gy, N) {
+  const bx = gx * PITCH_X, by = gy * PITCH_Y;
+  const floors = b.files.length;
+  const H = LOBBY_HZ + floors * FLOOR_HZ + 8;
+  let wall = WALLS[i % WALLS.length];
+  if (N) wall = shade(wall, 0.8, 0.45);
+  const faceR = shade(wall, 1.02, N ? 0.55 : 0.68);
+  const roof = shade(wall, 0.7, N ? 0.62 : 1.18);
+  const trim = shade(wall, 1.05, N ? 0.78 : 0.72);
+  const g = el('g', {}, svg);
+  el('title', {}, g).textContent = b.full;
+
+  const A = isoS(bx, by), B = isoS(bx + W_ISO, by), C = isoS(bx + W_ISO, by + D_ISO), D = isoS(bx, by + D_ISO);
+  // cast shadow to the lower-left
+  const sh = Math.min(H, 170);
+  const sv = { x: -sh * 0.5, y: sh * 0.25 };
+  el('polygon', {
+    points: P([D, C, { x: C.x + sv.x, y: C.y + sv.y }, { x: D.x + sv.x, y: D.y + sv.y }]),
+    fill: '#2B3345', opacity: N ? 0.35 : 0.16,
   }, g);
 
-  // rooftop character on the roof plane: water tower / antenna / AC unit
-  const r = rnd(i * 17 + 3);
-  const ox = 8, oy = -DY + 2;   // nudge props onto the roof plane
-  if (r > 0.62) {
-    el('rect', { x: x + w - 46 + ox, y: top - 44 + oy, width: 4, height: 38, fill: trim }, g);
-    el('rect', { x: x + w - 22 + ox, y: top - 44 + oy, width: 4, height: 38, fill: trim }, g);
-    el('rect', { x: x + w - 50 + ox, y: top - 74 + oy, width: 36, height: 33, rx: 4, fill: N ? '#4A3A2E' : '#A8795A' }, g);
-    el('path', { d: `M ${x + w - 52 + ox} ${top - 74 + oy} L ${x + w - 32 + ox} ${top - 90 + oy} L ${x + w - 12 + ox} ${top - 74 + oy} Z`, fill: N ? '#3A2E24' : '#8B6142' }, g);
-  } else if (r > 0.3) {
-    el('rect', { x: x + 18 + ox, y: top - 38 + oy, width: 3, height: 32, fill: trim }, g);
-    el('circle', { cx: x + 19.5 + ox, cy: top - 40 + oy, r: 4, fill: N ? '#FF6B6B' : trim }, g);
-  } else {
-    el('rect', { x: x + w - 38 + ox, y: top - 20 + oy, width: 26, height: 14, rx: 2, fill: trim }, g);
+  // the volume + roof trim
+  isoBox(g, bx, by, W_ISO, D_ISO, 0, H, roof, wall, faceR);
+  el('polygon', {
+    points: P([{ x: A.x, y: A.y - H }, { x: B.x, y: B.y - H }, { x: C.x, y: C.y - H }, { x: D.x, y: D.y - H }]),
+    fill: 'none', stroke: trim, 'stroke-width': 2.5,
+  }, g);
+
+  // face helpers: point at fraction t along a wall, elevated h px
+  const PF = (t, h) => ({ x: D.x + (C.x - D.x) * t, y: D.y + (C.y - D.y) * t - h });   // front-left wall
+  const PR = (t, h) => ({ x: C.x + (B.x - C.x) * t, y: C.y + (B.y - C.y) * t - h });   // front-right wall
+
+  // lobby: door with light + striped awning on the front wall
+  el('polygon', { points: P([PF(0.62, 0), PF(0.84, 0), PF(0.84, 15), PF(0.62, 15)]), fill: shade(wall, 1, 0.45) }, g);
+  const dl = PF(0.8, 8);
+  el('circle', { cx: dl.x, cy: dl.y, r: 1.6, fill: '#FFD98A' }, g);
+  for (let s = 0; s < 4; s++) {
+    el('polygon', {
+      points: P([PF(0.60 + s * 0.065, 15), PF(0.665 + s * 0.065, 15), PF(0.665 + s * 0.065, 20), PF(0.60 + s * 0.065, 20)]),
+      fill: s % 2 ? (N ? '#8A93A6' : '#F2EFE4') : trim,
+    }, g);
+  }
+
+  // graffiti tag on the shadowed wall of some buildings
+  if (rnd(i * 29 + 7) > 0.6) {
+    const gc = ['#F26AA0', '#6AE0C8', '#F2C21F'][Math.floor(rnd(i * 3) * 3)];
+    el('polygon', { points: P([PR(0.15, 4), PR(0.5, 8), PR(0.5, 15), PR(0.15, 10)]), fill: gc, opacity: 0.75 }, g);
+    el('polygon', { points: P([PR(0.52, 6), PR(0.8, 4), PR(0.8, 12), PR(0.52, 13)]), fill: shade(gc, 1, 1.2), opacity: 0.7 }, g);
   }
 
   // floors, bottom-up: one per file
-  b.files.forEach((f, fi) => {
-    const fy = GROUND - LOBBY_H - (fi + 1) * FLOOR_H;
-    stations.set(f.path, drawFloor(g, i, fi, f, x, w, fy, wall, trim, N));
-  });
+  const ctx = {
+    trim,
+    streetIso: { x: bx + W_ISO * 0.15, y: by + D_ISO + S_ISO * 0.45 },
+    vx: bx - S_ISO / 2,
+  };
+  ctx.base = isoS(ctx.streetIso.x, ctx.streetIso.y);
+  b.files.forEach((f, fi) => stations.set(f.path, drawFloorIso(g, i, fi, f, PF, PR, ctx, N)));
 
-  // lobby: door with awning + folder sign
-  const dx = x + w - 42;
-  el('rect', { x: dx, y: GROUND - 27, width: 22, height: 27, rx: 2, fill: shade(wall, 1, 0.5) }, g);
-  el('circle', { cx: dx + 17, cy: GROUND - 13, r: 1.8, fill: '#FFD98A' }, g);
-  for (let s = 0; s < 5; s++) {
-    el('rect', { x: dx - 5 + s * 6.6, y: GROUND - 34, width: 6.6, height: 8, fill: s % 2 ? (N ? '#8A93A6' : '#F2EFE4') : trim }, g);
+  // rooftop life: water tower / roof garden / AC + antenna
+  const r = rnd(i * 17 + 3);
+  if (r > 0.6) {
+    const t = isoBox(g, bx + W_ISO - 1.3, by + 0.4, 0.85, 0.85, H + 6, H + 30, N ? '#3A2E24' : '#8B6142', N ? '#4A3A2E' : '#A8795A', N ? '#3E3026' : '#96684A');
+    const tc = isoS(bx + W_ISO - 0.875, by + 0.825);
+    el('polygon', { points: P([{ x: tc.x - 20, y: tc.y - H - 30 }, { x: tc.x, y: tc.y - H - 44 }, { x: tc.x + 20, y: tc.y - H - 30 }]), fill: N ? '#332620' : '#7E5C40' }, g);
+  } else if (r > 0.35) {
+    el('polygon', { points: P([isoS(bx + 0.4, by + 0.4), isoS(bx + 1.8, by + 0.4), isoS(bx + 1.8, by + 1.4), isoS(bx + 0.4, by + 1.4)].map(p => ({ x: p.x, y: p.y - H }))), fill: N ? '#22402C' : '#8FC177' }, g);
+    const t1 = isoS(bx + 0.9, by + 0.9), t2 = isoS(bx + 1.5, by + 1.1);
+    el('circle', { cx: t1.x, cy: t1.y - H - 8, r: 8, fill: N ? '#2E4A3C' : '#9CCB6B' }, g);
+    el('circle', { cx: t2.x, cy: t2.y - H - 6, r: 6, fill: N ? '#3A5C4A' : '#B7DC8B' }, g);
+  } else {
+    isoBox(g, bx + W_ISO - 1.1, by + D_ISO - 1.0, 0.6, 0.5, H, H + 9, trim, shade(trim, 1, 0.8), shade(trim, 1, 0.65));
+    const ap = isoS(bx + 0.5, by + 0.5);
+    el('rect', { x: ap.x - 1.5, y: ap.y - H - 26, width: 3, height: 26, fill: trim }, g);
+    el('circle', { cx: ap.x, cy: ap.y - H - 28, r: 3.5, fill: N ? '#FF6B6B' : trim }, g);
   }
-  const sw = Math.min(w - 16, 11 + b.name.length * 6.4);
-  el('rect', { x: x + 6, y: GROUND - LOBBY_H + 3, width: sw, height: 14, rx: 4, fill: N ? '#101828' : '#2B2F3A' }, g);
-  const t = el('text', { class: 'signtext', x: x + 11, y: GROUND - LOBBY_H + 13.5 }, g);
+
+  // roof sign with the folder name + giant painted initial
+  const rc = isoS(bx + W_ISO / 2, by + D_ISO / 2);
+  const gi = el('text', {
+    x: rc.x, y: rc.y - H + 12, 'text-anchor': 'middle',
+    transform: `rotate(26.57 ${rc.x} ${rc.y - H + 12})`,
+    style: `font: 800 30px ui-monospace, Menlo, monospace; fill: ${N ? '#FFFFFF14' : '#00000018'}`,
+  }, g);
+  gi.textContent = b.name[0].toUpperCase();
+  const sw = 16 + b.name.length * 6.4;
+  el('rect', { x: rc.x - sw / 2, y: rc.y - H - 9, width: sw, height: 15, rx: 7, fill: N ? '#101828' : '#2B2F3A', opacity: 0.92 }, g);
+  const t = el('text', { class: 'signtext', x: rc.x, y: rc.y - H + 2, 'text-anchor': 'middle' }, g);
   t.textContent = b.name;
   el('title', {}, t).textContent = b.full;
 
-  // exterior ladder in the alley on the left
-  const lx = x - 16;
-  const lcol = N ? '#5A6273' : '#7A828F';
-  el('rect', { x: lx - 5, y: top, width: 2.6, height: hgt, fill: lcol }, g);
-  el('rect', { x: lx + 3, y: top, width: 2.6, height: hgt, fill: lcol }, g);
-  for (let ry = top + 6; ry < GROUND - 4; ry += 9) {
-    el('rect', { x: lx - 5, y: ry, width: 10.6, height: 2.2, fill: lcol }, g);
+  // ladder up the front wall
+  const lf = PF(0.15, 0);
+  const lcol = N ? '#5A6273' : '#4E5560';
+  el('rect', { x: lf.x - 5, y: lf.y - H + 6, width: 2.4, height: H - 6, fill: lcol }, g);
+  el('rect', { x: lf.x + 3, y: lf.y - H + 6, width: 2.4, height: H - 6, fill: lcol }, g);
+  for (let ry = lf.y - 6; ry > lf.y - H + 8; ry -= 8) {
+    el('rect', { x: lf.x - 5, y: ry, width: 10.4, height: 2, fill: lcol }, g);
   }
 }
 
-function drawFloor(g, bi, fi, f, x, w, fy, wall, trim, N) {
-  el('rect', { x, y: fy + FLOOR_H - 2, width: w, height: 2, fill: shade(wall, 1, 0.85), opacity: 0.7 }, g);
+function drawFloorIso(g, bi, fi, f, PF, PR, ctx, N) {
+  const hb = LOBBY_HZ + fi * FLOOR_HZ, ht = hb + FLOOR_HZ;
   const wins = [];
-  for (let wi = 0; wi < 2; wi++) {
+  for (const [wi, [t0, t1]] of [[0, [0.05, 0.19]], [1, [0.24, 0.38]]].entries()) {
     const lit = N && rnd(bi * 131 + fi * 17 + wi * 7) > 0.55;
-    wins.push(el('rect', {
-      x: x + 10 + wi * 20, y: fy + 5, width: 14, height: FLOOR_H - 11, rx: 2,
-      fill: lit ? '#FFD98A' : (N ? '#25314A' : '#D6ECF7'),
-      stroke: trim, 'stroke-width': 1.2,
-    }, g));
-  }
-  // window on the isometric side wall
-  {
-    const k = DEPTH_Y / DEPTH;
-    const sx1 = x + w + 5, sx2 = x + w + DEPTH - 5;
-    const o1 = 5 * k, o2 = (DEPTH - 5) * k;
-    const lit = N && rnd(bi * 131 + fi * 17 + 91) > 0.6;
     wins.push(el('polygon', {
-      points: `${sx1},${fy + 6 - o1} ${sx2},${fy + 6 - o2} ${sx2},${fy + FLOOR_H - 6 - o2} ${sx1},${fy + FLOOR_H - 6 - o1}`,
-      fill: lit ? '#EDC372' : (N ? '#1D2740' : 'rgba(0,0,0,0.16)'),
+      points: P([PF(t0, ht - 4), PF(t1, ht - 4), PF(t1, hb + 3), PF(t0, hb + 3)]),
+      fill: lit ? '#FFD98A' : (N ? '#25314A' : '#D6ECF7'),
+      stroke: ctx.trim, 'stroke-width': 1.1,
     }, g));
   }
-  const label = el('text', { class: 'floorlabel' + (N ? ' night' : ''), x: x + 52, y: fy + FLOOR_H / 2 + 3 }, g);
+  const litR = N && rnd(bi * 131 + fi * 17 + 91) > 0.6;
+  wins.push(el('polygon', {
+    points: P([PR(0.22, ht - 5), PR(0.55, ht - 5), PR(0.55, hb + 4), PR(0.22, hb + 4)]),
+    fill: litR ? '#EDC372' : (N ? '#1D2740' : 'rgba(0,0,0,0.16)'),
+  }, g));
+
+  const lp = PF(0.69, hb + FLOOR_HZ / 2 - 4);
+  const label = el('text', {
+    class: 'floorlabel' + (N ? ' night' : ''), x: lp.x, y: lp.y,
+    'text-anchor': 'middle', transform: `rotate(26.57 ${lp.x} ${lp.y})`,
+  }, g);
   label.textContent = f.name.length > 11 ? f.name.slice(0, 10) + '…' : f.name;
   el('title', {}, label).textContent = f.path;
-  const glow = el('rect', {
-    class: 'floorglow', x: x + 2, y: fy + 2, width: w - 4, height: FLOOR_H - 4, rx: 4,
+
+  const glow = el('polygon', {
+    class: 'floorglow',
+    points: P([PF(0.02, ht - 1), PF(0.98, ht - 1), PF(0.98, hb + 1), PF(0.02, hb + 1)]),
     fill: '#FFD98A', visibility: 'hidden',
   }, g);
-  return { perchX: x + w / 2, floorY: fy + FLOOR_H - 2, ladderX: x - 16, glow, wins, label };
+
+  const wf = PF(0.15, 0);
+  const ladderTop = { x: wf.x, y: wf.y - hb - 2 };
+  const pp = PF(0.46, hb);
+  const perch = { x: pp.x, y: pp.y - 2 };
+  return {
+    streetIso: ctx.streetIso, vx: ctx.vx, base: ctx.base,
+    wallFoot: wf, ladderTop, perch,
+    wayDown: [ladderTop, wf, ctx.base],
+    glow, wins, label,
+  };
 }
 
 async function refreshMap() {
@@ -1177,27 +1281,32 @@ async function refreshMap() {
 let refreshTimer = null;
 function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refreshMap, 800); }
 
-/* ---------- routing: run the street, climb the ladder ---------- */
+/* ---------- routing: Manhattan on the street grid, then up the ladder ---------- */
 function dedupe(pts) {
   return pts.filter((p, j) => j === 0 || Math.hypot(p.x - pts[j-1].x, p.y - pts[j-1].y) > 0.5);
 }
-function descendPts(a) {
-  if (a.y < GROUND - 2) {
-    const lx = a.ladderX ?? a.x;
-    return [{ x: lx, y: a.y }, { x: lx, y: GROUND }];  // back to the ladder, climb down
+function streetRoute(fromIso, toIso, vx) {
+  const pts = [];
+  if (Math.abs(fromIso.y - toIso.y) > 0.05) {
+    pts.push(isoS(vx, fromIso.y), isoS(vx, toIso.y));   // turn down a cross street
   }
-  return [];
+  pts.push(isoS(toIso.x, toIso.y));
+  return pts;
 }
 function routeVia(a, st) {
-  return dedupe([
-    { x: a.x, y: a.y }, ...descendPts(a),
-    { x: st.ladderX, y: GROUND },
-    { x: st.ladderX, y: st.floorY },
-    { x: st.perchX, y: st.floorY },
-  ]);
+  const pts = [{ x: a.x, y: a.y }];
+  if (a.aloft && a.wayDown) pts.push(...a.wayDown);      // ledge → ladder → street
+  pts.push(...streetRoute(a.iso || SPAWN.iso, st.streetIso, st.vx));
+  pts.push(st.wallFoot, st.ladderTop, st.perch);
+  a.iso = { ...st.streetIso };
+  return dedupe(pts);
 }
-function routeGround(a, tx) {
-  return dedupe([{ x: a.x, y: a.y }, ...descendPts(a), { x: tx, y: GROUND }]);
+function routeGround(a, toIso) {
+  const pts = [{ x: a.x, y: a.y }];
+  if (a.aloft && a.wayDown) pts.push(...a.wayDown);
+  pts.push(...streetRoute(a.iso || SPAWN.iso, toIso, toIso.x));
+  a.iso = { ...toIso };
+  return dedupe(pts);
 }
 
 /* ---------- agents ---------- */
@@ -1237,14 +1346,19 @@ function makeAgent(id) {
 
   // main walks in from the edge of town; kids pop out at street level below the main agent
   const main = mainId && agents.get(mainId);
-  const sx = isKid && main ? main.x : CITY.spawnX;
-  const sy = GROUND;
+  let iso0 = { ...SPAWN.iso }, sx = SPAWN.x, sy = SPAWN.y;
+  if (isKid && main) {
+    iso0 = { ...(main.iso || SPAWN.iso) };
+    const p = isoS(iso0.x, iso0.y);
+    sx = p.x; sy = p.y;
+  }
 
   const a = {
     id, g, bubble, bubbleBg, bubbleText, flip, pose, isKid,
     frames: [], runCycle: [0], workBase: 1, workCount: 1,
     variantIdx: isKid ? 1 + spriteIdx++ : 0,
     x: sx, y: sy, lastFile: null,
+    iso: iso0, aloft: false, wayDown: null,
     state: 'idle', queue: [], path: [], seg: 0, segT: 0,
     remaining: 0, vel: 0, animT: 0, workT: 0, frame: -1,
     dwellUntil: 0, lastActive: performance.now(), returning: false,
@@ -1293,6 +1407,8 @@ function beginPath(a, pts) {
   a.remaining = pathLength(pts);
   a.vel = Math.max(a.vel, 20);
   a.state = 'moving';
+  a.aloft = false;       // any planned path already includes the climb down
+  a.wayDown = null;
 }
 
 function startNext(a) {
@@ -1303,15 +1419,15 @@ function startNext(a) {
   a.job = job;
   a.returning = false;
   beginPath(a, routeVia(a, st));
-  ensureVisible(st.perchX, st.floorY);
+  ensureVisible(st.perch.x, st.perch.y);
 }
 
-/* Sub-agent finished — run back down the street to the main agent and vanish. */
+/* Sub-agent finished — run back through the streets to the main agent and vanish. */
 function startReturn(a) {
   const main = mainId && agents.get(mainId);
   a.returning = true;
   a.job = null;
-  beginPath(a, routeGround(a, main ? main.x : CITY.spawnX));
+  beginPath(a, routeGround(a, main && main.iso ? main.iso : SPAWN.iso));
 }
 
 function despawn(a) {
@@ -1335,7 +1451,8 @@ function arrive(a) {
   a.say(job.verbText, job.verbClass, job.file);
 
   if (st) {
-    a.ladderX = st.ladderX;
+    a.aloft = true;
+    a.wayDown = st.wayDown.slice();
     a.face(1);
     st.glow.setAttribute('visibility', 'visible');
     st.wins.forEach(wn => wn.setAttribute('fill', '#FFD98A'));   // the floor lights up
@@ -1499,7 +1616,10 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (m) => {
 });
 
 refreshMap().then(() => {
-  mapwrap.scrollTo({ left: 0, top: CITY.height });   // street level, edge of town
+  mapwrap.scrollTo({
+    left: SPAWN.x - mapwrap.clientWidth / 3,
+    top: SPAWN.y - mapwrap.clientHeight / 2,
+  });
   connect();
 });
 </script>
