@@ -2953,12 +2953,11 @@ function finaleFrame(t) {
 /* front→iso morph, driven by the website's scroll via postMessage {type:'gc-elev', t} */
 function recentreDemo() {
   if (BLDG_REPO) {
-    // a visitor's repo city: dead-centre the whole skyline's bounding box in the frame
-    const bb = svg.getBBox();
-    mapwrap.scrollTo({
-      left: (bb.x + bb.width / 2) * DZOOM - mapwrap.clientWidth / 2,
-      top: (bb.y + bb.height / 2) * DZOOM - mapwrap.clientHeight / 2,
-    });
+    // a visitor's repo city: DZOOM already fits the whole skyline inside the frame,
+    // so flexbox centres it — scrollTo is a no-op when nothing overflows
+    mapwrap.style.display = 'flex';
+    mapwrap.style.alignItems = 'center';
+    mapwrap.style.justifyContent = 'center';
     return;
   }
   const c = isoS(WORLD.spanX / 2, WORLD.spanY / 2);
@@ -3078,10 +3077,16 @@ function startBldgAgent() {
     knownDirs = new Set();
     return refreshMap().then(() => {
       if (BLDG_REPO) {
-        mapwrap.style.display = '';
+        // shrink-wrap the svg to the skyline's bounding box — the base canvas is padded out
+        // to at least fill the frame (see buildMap), so without this the content sits at its
+        // raw top-left offset inside that oversized box and flex-centring has nothing to do
         DZOOM = 1;
         const bb = svg.getBBox();
-        const fit = Math.min(mapwrap.clientWidth / (bb.width + 120), mapwrap.clientHeight / (bb.height + 120));
+        const pad = 60;
+        svg.setAttribute('viewBox', `${(bb.x - pad).toFixed(0)} ${(bb.y - pad).toFixed(0)} ${(bb.width + 2 * pad).toFixed(0)} ${(bb.height + 2 * pad).toFixed(0)}`);
+        svg.setAttribute('width', (bb.width + 2 * pad).toFixed(0));
+        svg.setAttribute('height', (bb.height + 2 * pad).toFixed(0));
+        const fit = Math.min(mapwrap.clientWidth / (bb.width + 2 * pad), mapwrap.clientHeight / (bb.height + 2 * pad));
         DZOOM = Math.max(0.42, Math.min(1.7, fit));
         svg.style.zoom = DZOOM;
         recentreDemo();

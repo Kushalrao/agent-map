@@ -12,18 +12,6 @@
   #logo { position: fixed; top: 34px; left: 44px; z-index: 20; }
   #logo img { height: 74px; filter: drop-shadow(2px 3px 0 #000000); display: block; }
 
-  /* buy button — fixed top-right, fades in once the first fold has loaded */
-  #buy {
-    position: fixed; top: 34px; right: 40px; z-index: 30;
-    background: #FFFFFF; color: #0A0B0D; text-decoration: none;
-    font: 700 16px/1 -apple-system, "SF Pro Text", "Segoe UI", Helvetica, sans-serif;
-    letter-spacing: -0.2px; padding: 14px 22px; border-radius: 0;
-    opacity: 0; transform: translateY(-6px); pointer-events: none;
-    transition: opacity .5s ease, transform .5s ease, background .15s;
-  }
-  #buy.show { opacity: 1; transform: none; pointer-events: auto; }
-  #buy:hover { background: #EDEDEF; }
-
   /* scroll stage: the city stays pinned while scroll morphs front → iso */
   .stage { height: 360vh; position: relative; }
   .pin { position: sticky; top: 0; height: 100vh; overflow: hidden; }
@@ -101,7 +89,6 @@
 <body>
 
 <div id="logo"><img src="logo.svg" alt="git city" /></div>
-<a id="buy" href="#" target="_blank" rel="noopener">Buy now · $5</a>
 
 <div class="stage" id="stage">
   <div class="pin">
@@ -147,12 +134,6 @@
   const city = document.getElementById('city');
   let ready = false;
   city.addEventListener('load', () => { ready = true; send(); });
-
-  // reveal the buy button only once the user has scrolled past the first fold
-  const buy = document.getElementById('buy');
-  addEventListener('scroll', () => {
-    buy.classList.toggle('show', window.scrollY > innerHeight * 0.9);
-  }, { passive: true });
 
   // finale: drive the closing city's zoom from this section's scroll progress
   const finaleStage = document.getElementById('finaleStage');
