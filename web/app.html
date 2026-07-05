@@ -276,13 +276,30 @@ const DEMO_TREE = (() => {
   }
   return root;
 })();
-/* one-building showcase (website): a single tower, nothing else — the tree root
-   IS the folder, so flattenDirs yields exactly one building */
-const BLDG_TREE = {
-  name: 'src', path: 'src', type: 'dir',
-  children: ['auth.ts', 'api.ts', 'store.ts', 'router.ts', 'index.ts', 'utils.ts', 'theme.ts', 'db.ts', 'events.ts', 'cache.ts', 'types.ts', 'config.ts']
-    .map(n => ({ name: n, path: 'src/' + n, type: 'file' })),
-};
+/* building showcase (website): a small skyline of ~10 buildings, so the default
+   preview reads as a living city rather than a single lonely tower */
+const BLDG_TREE = (() => {
+  const plan = {
+    src: ['auth.ts', 'api.ts', 'store.ts', 'router.ts', 'index.ts', 'utils.ts'],
+    components: ['Button.tsx', 'Modal.tsx', 'Card.tsx', 'Navbar.tsx', 'Table.tsx'],
+    hooks: ['useAuth.ts', 'useFetch.ts', 'useTheme.ts', 'useForm.ts'],
+    server: ['auth.js', 'users.js', 'webhooks.js', 'health.js'],
+    lib: ['db.js', 'cache.js', 'queue.js', 'email.js'],
+    tests: ['auth.test.js', 'api.test.js', 'utils.test.js'],
+    docs: ['getting-started.md', 'architecture.md', 'api.md'],
+    config: ['default.json', 'production.json'],
+    scripts: ['build.sh', 'release.js', 'seed.js'],
+    infra: ['main.tf', 'network.tf', 'dns.tf'],
+  };
+  const root = { name: 'app', path: '', type: 'dir', children: [] };
+  for (const [dir, files] of Object.entries(plan)) {
+    root.children.push({
+      name: dir, path: dir, type: 'dir',
+      children: files.map(f => ({ name: f, path: dir + '/' + f, type: 'file' })),
+    });
+  }
+  return root;
+})();
 let BLDG_REPO = null;   // the visitor's full repo tree — replaces the one-building scene
 
 function demoFiles(node, out = []) {
@@ -1156,7 +1173,7 @@ function buildMap(root) {
     lastTop = topKey;
     items.push(d);
   }
-  const cols = (BLDG && !BLDG_REPO) ? 1 : Math.max(3, Math.ceil(Math.sqrt(items.length * 1.4)));
+  const cols = Math.max(3, Math.ceil(Math.sqrt(items.length * 1.4)));
   const rows = Math.max(1, Math.ceil(items.length / cols));
   const maxFloors = Math.max(1, ...dirs.map(d => d.files.length), FRONT ? 50 : 0);
   const maxH = LOBBY_HZ + maxFloors * FLOOR_HZ + 70;
@@ -2953,14 +2970,6 @@ function finaleFrame(t) {
 
 /* front→iso morph, driven by the website's scroll via postMessage {type:'gc-elev', t} */
 function recentreDemo() {
-  if (BLDG_REPO) {
-    // a visitor's repo city: DZOOM already fits the whole skyline inside the frame,
-    // so flexbox centres it — scrollTo is a no-op when nothing overflows
-    mapwrap.style.display = 'flex';
-    mapwrap.style.alignItems = 'center';
-    mapwrap.style.justifyContent = 'center';
-    return;
-  }
   const c = isoS(WORLD.spanX / 2, WORLD.spanY / 2);
   // front view: the ground line hugs the bottom edge; the morph ends on the city's
   // front corner — the plaza edge meeting the black, fully in frame
@@ -3033,67 +3042,47 @@ if (FRONT) {
   });
 }
 
-/* building showcase: quiet streets, one parked car, one agent living in the tower */
-function dressBldgScene() {
-  // streets stay quiet here; one car sits parked at the curb by the entrance
-  for (const c of CARS) if (c.el) c.el.remove();
-  CARS.length = 0;
-  CARS.gridKey = 'bldg-parked';
-  const car = {
-    el: el('g', {}, svg), leg: 0, t: 0, type: 'sedan',
-    color: WALLS[2 % WALLS.length], seed: 7, flareEls: [],
-    corners: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }, { x: 0, y: 5 }],
-  };
-  buildCarBody(car, SCENE_N);
-  const cs = isoS(W_ISO * 0.72, D_ISO + S_ISO * 0.5);
-  car.el.setAttribute('transform', `translate(${cs.x.toFixed(1)} ${cs.y.toFixed(1)})`);
-
-  // shrink-wrap the svg to the block and let flexbox centre it —
-  // transforms are owned by the render loop, so don't fight over them
+/* building showcase: shrink-wrap the svg to the skyline's bounding box and zoom-to-fit,
+   then let flexbox centre it — works for both the default multi-building demo city and
+   a visitor's own loaded repo (traffic/pedestrians are seeded generically in buildMap,
+   scaled to the grid size, so a bigger skyline here just means a busier street) */
+function fitBldgScene() {
   document.documentElement.style.background = 'transparent';
   document.body.style.background = 'transparent';
   mapwrap.style.background = 'transparent';
+  DZOOM = 1;
   const bb = svg.getBBox();
-  const pad = 46;
+  const pad = 60;
   svg.setAttribute('viewBox', `${(bb.x - pad).toFixed(0)} ${(bb.y - pad).toFixed(0)} ${(bb.width + 2 * pad).toFixed(0)} ${(bb.height + 2 * pad).toFixed(0)}`);
   svg.setAttribute('width', (bb.width + 2 * pad).toFixed(0));
   svg.setAttribute('height', (bb.height + 2 * pad).toFixed(0));
+  const fit = Math.min(mapwrap.clientWidth / (bb.width + 2 * pad), mapwrap.clientHeight / (bb.height + 2 * pad));
+  DZOOM = Math.max(0.42, Math.min(1.7, fit));
+  svg.style.zoom = DZOOM;
   mapwrap.style.display = 'flex';
   mapwrap.style.alignItems = 'center';
   mapwrap.style.justifyContent = 'center';
 }
 
-function startBldgAgent() {
-  // the resident agent: walks in, climbs, works floor to floor, forever
-  const go = () => {
-    const files = demoFiles(BLDG_REPO || BLDG_TREE);   // re-read: the repo box can swap the scene
-    handleActivity({ agent: 'main', tool: 'Edit', file: files[Math.floor(Math.random() * files.length)] });
-    setTimeout(go, 3600 + Math.random() * 2600);
-  };
-  setTimeout(go, 1200);
+function startBldgAgents() {
+  // a handful of resident agents, each independently roaming the skyline forever
+  const NAMES = ['agent-1', 'agent-2', 'agent-3', 'agent-4', 'agent-5'];
+  const tool = () => { const r = Math.random(); return r < 0.5 ? 'Read' : r < 0.85 ? 'Edit' : 'Write'; };
+  for (const name of NAMES) {
+    const go = () => {
+      const files = demoFiles(BLDG_REPO || BLDG_TREE);   // re-read: the repo box can swap the scene
+      handleActivity({ agent: name, tool: tool(), file: files[Math.floor(Math.random() * files.length)] });
+      setTimeout(go, 3600 + Math.random() * 2600);
+    };
+    setTimeout(go, 400 + Math.random() * 2200);   // staggered starts
+  }
 
-  // rebuild the preview and frame it — one tower (dressBldgScene) or a whole repo city
+  // rebuild the preview and frame it — default skyline or a visitor's own repo, same fit logic
   function redrawBldg() {
     INTRO = true;
     knownDirs = new Set();
     return refreshMap().then(() => {
-      if (BLDG_REPO) {
-        // shrink-wrap the svg to the skyline's bounding box — the base canvas is padded out
-        // to at least fill the frame (see buildMap), so without this the content sits at its
-        // raw top-left offset inside that oversized box and flex-centring has nothing to do
-        DZOOM = 1;
-        const bb = svg.getBBox();
-        const pad = 60;
-        svg.setAttribute('viewBox', `${(bb.x - pad).toFixed(0)} ${(bb.y - pad).toFixed(0)} ${(bb.width + 2 * pad).toFixed(0)} ${(bb.height + 2 * pad).toFixed(0)}`);
-        svg.setAttribute('width', (bb.width + 2 * pad).toFixed(0));
-        svg.setAttribute('height', (bb.height + 2 * pad).toFixed(0));
-        const fit = Math.min(mapwrap.clientWidth / (bb.width + 2 * pad), mapwrap.clientHeight / (bb.height + 2 * pad));
-        DZOOM = Math.max(0.42, Math.min(1.7, fit));
-        svg.style.zoom = DZOOM;
-        recentreDemo();
-      } else {
-        dressBldgScene();
-      }
+      fitBldgScene();
       setTimeout(() => { INTRO = false; }, 3000);
     });
   }
@@ -3119,7 +3108,7 @@ function startBldgAgent() {
 
 function connect() {
   if (DEMO) {
-    if (BLDG) startBldgAgent();
+    if (BLDG) startBldgAgents();
     else if (!REPO) startDemoAgents();   // repo mode waits for the visitor's tree
     return;
   }
@@ -3324,7 +3313,7 @@ function renderRoster() {
     const s = el('svg', { width: 104, height: 132, viewBox: '-27 -92 54 96' });
     const flip = el('g', {}, s);
     const frames = frameRows(def).map(rows => buildFrame(el('g', {}, flip), rows, def.colors));
-    frames.forEach((f, i) => f.setAttribute('visibility', i === 0 ? 'visible' : 'hidden'));
+    frames.forEach((f, fi) => f.setAttribute('visibility', fi === 0 ? 'visible' : 'hidden'));
     cell.appendChild(s);
     const nm = document.createElement('div');
     nm.textContent = def.name;
@@ -3332,7 +3321,7 @@ function renderRoster() {
     cell.appendChild(nm);
     const cyc = def.grids.runCycle;
     let iv = null, k = 0, cur = 0;
-    const show = i => { if (i === cur) return; frames[cur].setAttribute('visibility', 'hidden'); frames[i].setAttribute('visibility', 'visible'); cur = i; };
+    const show = idx => { if (idx === cur) return; frames[cur].setAttribute('visibility', 'hidden'); frames[idx].setAttribute('visibility', 'visible'); cur = idx; };
     cell.onmouseenter = () => {
       cell.style.transform = 'scale(1.14)';
       nm.style.opacity = '1';
@@ -3508,7 +3497,7 @@ if (CHAT) {
         window.addEventListener('message', (e) => {
           if (e.data && e.data.type === 'gc-zoom') finaleFrame(e.data.t);
         });
-      } else if (BLDG) dressBldgScene();
+      } else if (BLDG) fitBldgScene();
       else recentreDemo();
       if (FRONT) setTimeout(() => {
         SUNUP = true;
