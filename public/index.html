@@ -1766,19 +1766,26 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
 
   // square "brand" plate with the folder's initial
   if (H > 70 && style !== 'eiffel') {
-    const h1 = H - 12, h0 = H - 36;
+    // the main heading: a wide brand banner high on the facade (Capital One style)
+    const drop = style === 'clock' ? 22 : 0;   // sit below the clock face
+    const h1 = H - 8 - drop, h0 = H - 26 - drop;
+    const white = rnd(i * 41 + 3) > 0.5;
+    const panel = white ? (N ? '#141C2E' : '#FFFFFF') : shade(wall, 1.18, N ? 0.35 : 0.4);
+    const txtCol = white ? (N ? '#F2EFD9' : shade(wall, 1.2, 0.38)) : '#FFFFFF';
     el('polygon', {
-      points: P([PFt(0.68, h1), PFt(0.96, h1), PFt(0.96, h0), PFt(0.68, h0)]),
-      fill: N ? '#141C2E' : '#FFFFFF',
-      stroke: N ? shade(wall, 1, 1.2) : shade(wall, 1, 0.5), 'stroke-width': 1.5,
+      points: P([PFt(0.08, h1), PFt(0.92, h1), PFt(0.92, h0), PFt(0.08, h0)]),
+      fill: panel,
+      stroke: white ? shade(wall, 1, N ? 1.2 : 0.75) : shade(wall, 1, N ? 1.3 : 1.35),
+      'stroke-width': 1.2,
     }, g);
-    const lp2 = PFt(0.82, (h0 + h1) / 2 - 5);
+    const lp2 = PFt(0.5, (h0 + h1) / 2 - 4.5);
     const it = el('text', {
       x: lp2.x, y: lp2.y, 'text-anchor': 'middle',
       transform: `rotate(${ang.toFixed(1)} ${lp2.x} ${lp2.y})`,
-      style: `font: 800 13px ui-monospace, Menlo, monospace; fill: ${N ? shade(wall, 1, 1.35) : shade(wall, 1, 0.45)}`,
+      style: `font: 800 10px ui-monospace, Menlo, monospace; fill: ${txtCol}`,
     }, g);
-    it.textContent = b.name.slice(0, 2).toUpperCase();
+    it.textContent = b.name.length > 16 ? b.name.slice(0, 15) + '…' : b.name;
+    el('title', {}, it).textContent = b.full;
   }
 
   // floors, bottom-up: one per file
@@ -1791,20 +1798,22 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
   ctx.base = baseScr;
   b.files.forEach((f, fi) => stations.set(f.path, drawFloorIso(g, i, fi, f, PFt, PRt, ctx, N)));
 
-  // big white sign board over the storefront, carrying the folder name (reference style)
+  // low-rises carry their heading on the white storefront board instead (Bank of America style)
   void capH;
-  el('polygon', {
-    points: P([PFt(0.08, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ + 10), PFt(0.08, LOBBY_HZ + 10)]),
-    fill: N ? '#141C2E' : '#FFFFFF', stroke: N ? shade(wall, 1, 1.15) : shade(wall, 1, 0.8), 'stroke-width': 1,
-  }, g);
-  const sp2 = PFt(0.5, LOBBY_HZ + 0.5);
-  const nameT = el('text', {
-    x: sp2.x, y: sp2.y, 'text-anchor': 'middle',
-    transform: `rotate(${ang.toFixed(1)} ${sp2.x} ${sp2.y})`,
-    style: `font: 700 8.5px ui-monospace, Menlo, monospace; fill: ${N ? '#F2EFD9' : '#2B2F3A'}`,
-  }, g);
-  nameT.textContent = b.name.length > 14 ? b.name.slice(0, 13) + '…' : b.name;
-  el('title', {}, nameT).textContent = b.full;
+  if (H <= 70 || style === 'eiffel') {
+    el('polygon', {
+      points: P([PFt(0.08, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ + 10), PFt(0.08, LOBBY_HZ + 10)]),
+      fill: N ? '#141C2E' : '#FFFFFF', stroke: N ? shade(wall, 1, 1.15) : shade(wall, 1, 0.8), 'stroke-width': 1,
+    }, g);
+    const sp2 = PFt(0.5, LOBBY_HZ + 0.5);
+    const nameT = el('text', {
+      x: sp2.x, y: sp2.y, 'text-anchor': 'middle',
+      transform: `rotate(${ang.toFixed(1)} ${sp2.x} ${sp2.y})`,
+      style: `font: 700 8.5px ui-monospace, Menlo, monospace; fill: ${N ? '#F2EFD9' : '#2B2F3A'}`,
+    }, g);
+    nameT.textContent = b.name.length > 14 ? b.name.slice(0, 13) + '…' : b.name;
+    el('title', {}, nameT).textContent = b.full;
+  }
 
   // ladder tracks the wall, even when the structure tapers
   const lcol = N ? '#5A6273' : '#4E5560';
