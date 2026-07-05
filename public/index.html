@@ -1031,7 +1031,10 @@ function buildMap(root) {
   // SVG-native hover glow (CSS drop-shadow on SVG groups is a no-op in Safari)
   const defs = el('defs', {}, svg);
   const flt = el('filter', { id: 'bglow', x: '-40%', y: '-40%', width: '180%', height: '180%' }, defs);
-  el('feDropShadow', { dx: 0, dy: 0, stdDeviation: 7, 'flood-color': '#FFD66E', 'flood-opacity': 0.95 }, flt);
+  // brighten the building itself, then wrap it in the warm halo
+  const cm = el('feComponentTransfer', { result: 'lit' }, flt);
+  for (const ch of ['feFuncR', 'feFuncG', 'feFuncB']) el(ch, { type: 'linear', slope: 1.18, intercept: 0.03 }, cm);
+  el('feDropShadow', { in: 'lit', dx: 0, dy: 0, stdDeviation: 7, 'flood-color': '#FFD66E', 'flood-opacity': 0.95 }, flt);
 
   riseKeys = INTRO ? 'all' : new Set(dirs.filter(d => !knownDirs.has(d.key)).map(d => d.key));
   knownDirs = new Set(dirs.map(d => d.key));
