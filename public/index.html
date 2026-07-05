@@ -122,8 +122,8 @@
   .agent .bubble-text { font-size: 10.5px; font-family: ui-monospace, Menlo, monospace; fill: var(--bubble-text); }
   .agent .bubble-verb { font-weight: 700; }
 
-  #themeBtn, #rotBtn {
-    position: fixed; right: 14px; z-index: 20;
+  #themeBtn {
+    position: fixed; right: 14px; top: 14px; z-index: 20;
     width: 38px; height: 38px; border-radius: 50%;
     background: var(--panel); backdrop-filter: blur(4px);
     border: 1px solid var(--panel-border); box-shadow: 0 2px 8px var(--shadow);
@@ -131,9 +131,7 @@
     font-size: 16px; line-height: 1; color: var(--fg);
     transition: transform 0.12s, box-shadow 0.12s;
   }
-  #themeBtn { top: 14px; }
-  #rotBtn { top: 60px; }
-  #themeBtn:hover, #rotBtn:hover { transform: scale(1.12); box-shadow: 0 3px 12px var(--shadow-hover); }
+  #themeBtn:hover { transform: scale(1.12); box-shadow: 0 3px 12px var(--shadow-hover); }
 </style>
 </head>
 <body>
@@ -143,7 +141,6 @@
     <div id="pickMenu"></div>
   </div>
   <button id="themeBtn" title="toggle day / night"></button>
-  <button id="rotBtn" title="rotate the city">↻</button>
   <div id="hud"><span id="status"></span><span id="watchdir">connecting…</span></div>
 
 <script>
@@ -899,8 +896,24 @@ let stations = new Map();  // file path -> {streetIso, vx, base, wallFoot, ladde
 let agents = new Map();
 let agentLayer = null;
 let OX = 0, OY = 0;        // iso origin on the canvas
-let VIEW = parseInt(localStorage.getItem('agentview-view') || '0', 10) % 4;
-const isoS = (ix, iy) => ({ x: OX + (ix - iy) * K, y: OY + (ix + iy) * K2 });
+let AZ = parseFloat(localStorage.getItem('agentview-az') || String(Math.PI / 4));   // camera azimuth — drag to orbit
+const KX = K * Math.SQRT2, KY = K2 * Math.SQRT2;
+const isoS = (ix, iy) => ({
+  x: OX + (ix * Math.cos(AZ) - iy * Math.sin(AZ)) * KX,
+  y: OY + (ix * Math.sin(AZ) + iy * Math.cos(AZ)) * KY,
+});
+
+/* footprint corners relabeled for the current azimuth: C is always the corner
+   nearest the camera, D its left neighbor, B its right — so walls, ladders and
+   labels always land on the two visible faces no matter the rotation */
+function cornersOf(x0, y0, wx, wy) {
+  const pts = [isoS(x0, y0), isoS(x0 + wx, y0), isoS(x0 + wx, y0 + wy), isoS(x0, y0 + wy)];
+  let ci = 0;
+  for (let i = 1; i < 4; i++) {
+    if (pts[i].y > pts[ci].y + 0.01 || (Math.abs(pts[i].y - pts[ci].y) <= 0.01 && pts[i].x < pts[ci].x)) ci = i;
+  }
+  return { C: pts[ci], D: pts[(ci + 1) % 4], A: pts[(ci + 2) % 4], B: pts[(ci + 3) % 4] };
+}
 let SPAWN = { iso: { x: -1, y: PITCH_Y - S_ISO / 2 }, x: 120, y: 400 };
 
 /* deterministic pseudo-random so the scenery is stable across rebuilds */
@@ -915,9 +928,9 @@ const ROOFS = ['#F2A0B8', '#A0D9C0', '#C0B8F2', '#F2D9A0', '#A0C4F2', '#F2B8A0',
 const GLASS = '#7BC9DE', GLASS_D = '#3E8FA3';
 const SKINS = ['#F8C89A', '#C68642', '#8D5524', '#FFDBAC'];
 
-/* draw an isometric box: roof + the two camera-facing walls */
+/* draw an isometric box: roof + the two camera-facing walls (azimuth-aware) */
 function isoBox(g, x0, y0, wx, wy, hb, ht, cTop, cLeft, cRight) {
-  const A = isoS(x0, y0), B = isoS(x0 + wx, y0), C = isoS(x0 + wx, y0 + wy), D = isoS(x0, y0 + wy);
+  const { A, B, C, D } = cornersOf(x0, y0, wx, wy);
   const up = (v, h) => ({ x: v.x, y: v.y - h });
   el('polygon', { points: P([up(A, ht), up(B, ht), up(C, ht), up(D, ht)]), fill: cTop }, g);
   el('polygon', { points: P([up(D, ht), up(C, ht), up(C, hb), up(D, hb)]), fill: cLeft }, g);
@@ -951,25 +964,21 @@ function buildMap(root) {
     lastTop = topKey;
     items.push(d);
   }
-  const baseCols = Math.max(3, Math.ceil(Math.sqrt(items.length * 1.4)));
-  const baseRows = Math.max(1, Math.ceil(items.length / baseCols));
+  const cols = Math.max(3, Math.ceil(Math.sqrt(items.length * 1.4)));
+  const rows = Math.max(1, Math.ceil(items.length / cols));
   const maxFloors = Math.max(1, ...dirs.map(d => d.files.length));
   const maxH = LOBBY_HZ + maxFloors * FLOOR_HZ + 70;
 
-  // VIEW rotates the whole grid in 90° steps so the city can be seen from any corner
-  const cols = VIEW % 2 ? baseRows : baseCols;
-  const rows = VIEW % 2 ? baseCols : baseRows;
-  const remap = (gx, gy) =>
-    VIEW === 0 ? [gx, gy]
-    : VIEW === 1 ? [baseRows - 1 - gy, gx]
-    : VIEW === 2 ? [baseCols - 1 - gx, baseRows - 1 - gy]
-    : [gy, baseCols - 1 - gx];
-
   const spanX = cols * PITCH_X, spanY = rows * PITCH_Y;
-  OX = (spanY + S_ISO) * K + 160;
-  OY = maxH + 160;
-  const width = Math.max(OX + (spanX + S_ISO) * K + 160, mapwrap.clientWidth);
-  const height = Math.max(OY + (spanX + spanY + 2 * S_ISO) * K2 + 120, mapwrap.clientHeight);
+  // bounding box of the world rectangle at the current azimuth
+  OX = 0; OY = 0;
+  const cs = [isoS(-S_ISO - 1, -S_ISO - 1), isoS(spanX + 1, -S_ISO - 1), isoS(spanX + 1, spanY + 1), isoS(-S_ISO - 1, spanY + 1)];
+  const minX = Math.min(...cs.map(p => p.x)), maxX = Math.max(...cs.map(p => p.x));
+  const minY = Math.min(...cs.map(p => p.y)), maxY = Math.max(...cs.map(p => p.y));
+  OX = 170 - minX;
+  OY = maxH + 170 - minY;
+  const width = Math.max(maxX - minX + 340, mapwrap.clientWidth);
+  const height = Math.max(maxY - minY + maxH + 300, mapwrap.clientHeight);
 
   const oldAgents = [...agents.values()];
   stations = new Map();
@@ -979,15 +988,14 @@ function buildMap(root) {
 
   drawGround(width, height, spanX, spanY, cols, rows, N);
 
-  // lots in painter's order: back of the scene first
-  const lots = items.map((it, idx) => {
-    const [gx, gy] = remap(idx % baseCols, Math.floor(idx / baseCols));
-    return { it, gx, gy };
-  });
+  // lots in painter's order: back of the scene first, valid at any azimuth
+  const lots = items.map((it, idx) => ({ it, gx: idx % cols, gy: Math.floor(idx / cols) }));
   const colorOf = new Map();
   let ci = 0;
   for (const it of items) if (!it.park) colorOf.set(it, ci++);
-  lots.sort((a, b) => (a.gx + a.gy) - (b.gx + b.gy) || a.gx - b.gx);
+  lots.sort((a, b) =>
+    isoS(a.gx * PITCH_X + W_ISO / 2, a.gy * PITCH_Y + D_ISO / 2).y -
+    isoS(b.gx * PITCH_X + W_ISO / 2, b.gy * PITCH_Y + D_ISO / 2).y);
   for (const { it, gx, gy } of lots) {
     if (it.park) drawParkLot(gx, gy, N);
     else drawBuildingIso(it, colorOf.get(it), gx, gy, N);
@@ -1113,9 +1121,10 @@ function drawCarIso(ix, iy, axis, col, N, seed) {
   const wx = axis === 'x' ? 1.25 : 0.6, wy = axis === 'x' ? 0.6 : 1.25;
   const body = N ? shade(col, 0.85, 0.5) : col;
   const dark = shade(body, 1, 0.7), darker = shade(body, 1, 0.55);
-  // cars cruise slowly up and down their street
+  // cars cruise slowly up and down their street (direction follows the camera azimuth)
   const u = (4 + rnd(seed + 3) * 7) * (rnd(seed + 8) > 0.5 ? 1 : -1);
-  const dx = axis === 'x' ? u * K : -u * K, dy = u * K2;
+  const o0 = isoS(0, 0), o1 = axis === 'x' ? isoS(u, 0) : isoS(0, u);
+  const dx = o1.x - o0.x, dy = o1.y - o0.y;
   const g = el('g', {
     class: 'roam',
     style: `--dx:${dx.toFixed(0)}px; --dy:${dy.toFixed(0)}px; --dur:${(30 + rnd(seed) * 40).toFixed(0)}s; --delay:-${(rnd(seed + 5) * 30).toFixed(0)}s`,
@@ -1134,7 +1143,8 @@ function drawCarIso(ix, iy, axis, col, N, seed) {
 function drawPedestrian(ix, iy, axis, seed, N) {
   const p = isoS(ix, iy);
   const u = (1.5 + rnd(seed) * 4) * (rnd(seed + 4) > 0.5 ? 1 : -1);
-  const dx = axis === 'x' ? u * K : -u * K, dy = u * K2;
+  const o0 = isoS(0, 0), o1 = axis === 'x' ? isoS(u, 0) : isoS(0, u);
+  const dx = o1.x - o0.x, dy = o1.y - o0.y;
   const g = el('g', {
     class: 'roam',
     style: `--dx:${dx.toFixed(0)}px; --dy:${dy.toFixed(0)}px; --dur:${(35 + rnd(seed + 2) * 45).toFixed(0)}s; --delay:-${(rnd(seed + 6) * 35).toFixed(0)}s`,
@@ -1240,7 +1250,8 @@ function drawBuildingIso(b, i, gx, gy, N) {
   const g = el('g', {}, svg);
   el('title', {}, g).textContent = b.full;
 
-  const A = isoS(bx, by), B = isoS(bx + W_ISO, by), C = isoS(bx + W_ISO, by + D_ISO), D = isoS(bx, by + D_ISO);
+  const { A, B, C, D } = cornersOf(bx, by, W_ISO, D_ISO);
+  const ang = Math.atan2(C.y - D.y, C.x - D.x) * 180 / Math.PI;   // slope of the front wall
   // cast shadow to the lower-left
   const sh = Math.min(H, 170);
   const sv = { x: -sh * 0.5, y: sh * 0.25 };
@@ -1289,7 +1300,7 @@ function drawBuildingIso(b, i, gx, gy, N) {
     const lp2 = PF(0.82, (h0 + h1) / 2 - 5);
     const it = el('text', {
       x: lp2.x, y: lp2.y, 'text-anchor': 'middle',
-      transform: `rotate(26.57 ${lp2.x} ${lp2.y})`,
+      transform: `rotate(${ang.toFixed(1)} ${lp2.x} ${lp2.y})`,
       style: `font: 800 13px ui-monospace, Menlo, monospace; fill: ${shade(wall, 1, 0.45)}`,
     }, g);
     it.textContent = b.name.slice(0, 2).toUpperCase();
@@ -1297,7 +1308,7 @@ function drawBuildingIso(b, i, gx, gy, N) {
 
   // floors, bottom-up: one per file
   const ctx = {
-    trim,
+    trim, ang,
     streetIso: { x: bx + W_ISO * 0.15, y: by + D_ISO + S_ISO * 0.45 },
     vx: bx - S_ISO / 2,
   };
@@ -1326,7 +1337,7 @@ function drawBuildingIso(b, i, gx, gy, N) {
   const rc = isoS(bx + W_ISO / 2, by + D_ISO / 2);
   const gi = el('text', {
     x: rc.x, y: rc.y - H + 12, 'text-anchor': 'middle',
-    transform: `rotate(26.57 ${rc.x} ${rc.y - H + 12})`,
+    transform: `rotate(${ang.toFixed(1)} ${rc.x} ${rc.y - H + 12})`,
     style: `font: 800 30px ui-monospace, Menlo, monospace; fill: ${N ? '#FFFFFF14' : '#00000018'}`,
   }, g);
   gi.textContent = b.name[0].toUpperCase();
@@ -1370,7 +1381,7 @@ function drawFloorIso(g, bi, fi, f, PF, PR, ctx, N) {
   const lp = PF(0.69, hb + FLOOR_HZ / 2 - 4);
   const label = el('text', {
     class: 'floorlabel' + (N ? ' night' : ''), x: lp.x, y: lp.y,
-    'text-anchor': 'middle', transform: `rotate(26.57 ${lp.x} ${lp.y})`,
+    'text-anchor': 'middle', transform: `rotate(${ctx.ang.toFixed(1)} ${lp.x} ${lp.y})`,
   }, g);
   label.textContent = f.name.length > 11 ? f.name.slice(0, 10) + '…' : f.name;
   el('title', {}, label).textContent = f.path;
@@ -1393,10 +1404,13 @@ function drawFloorIso(g, bi, fi, f, PF, PR, ctx, N) {
   };
 }
 
+let treeCache = null;
 async function refreshMap() {
   const data = await fetch('/tree').then(r => r.json());
+  treeCache = data;
   buildMap(data);
 }
+function rebuildScene() { if (treeCache) buildMap(treeCache); }
 let refreshTimer = null;
 function scheduleRefresh() { clearTimeout(refreshTimer); refreshTimer = setTimeout(refreshMap, 800); }
 
@@ -1724,35 +1738,49 @@ for (const [key, def] of Object.entries(CHARACTERS)) {
 pickBtn.replaceChildren(miniSprite(CHARACTERS[charKey]));
 pickBtn.onclick = () => pickMenu.classList.toggle('open');
 
-/* ---------- drag to pan around the city ---------- */
-let dragPan = null;
+/* ---------- drag the city: horizontal = orbit the camera, vertical = pan ---------- */
+let dragPan = null, rotDirty = false, rotBusy = false;
+function focusPoint() {
+  const m = mainId && agents.get(mainId);
+  return m ? { x: m.x, y: m.y } : { x: SPAWN.x, y: SPAWN.y };
+}
+function applyRotation() {
+  if (rotBusy) { rotDirty = true; return; }
+  rotBusy = true;
+  const before = focusPoint();
+  const offX = before.x - mapwrap.scrollLeft, offY = before.y - mapwrap.scrollTop;
+  rebuildScene();
+  const after = focusPoint();
+  mapwrap.scrollLeft = after.x - offX;
+  mapwrap.scrollTop = after.y - offY;
+  setTimeout(() => {
+    rotBusy = false;
+    if (rotDirty) { rotDirty = false; applyRotation(); }
+  }, 70);
+}
 mapwrap.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
   e.preventDefault();
-  dragPan = { x: e.clientX, y: e.clientY, sl: mapwrap.scrollLeft, st: mapwrap.scrollTop };
+  dragPan = { x: e.clientX, y: e.clientY, st: mapwrap.scrollTop, az: AZ };
   mapwrap.classList.add('dragging');
 });
 window.addEventListener('pointermove', (e) => {
   if (!dragPan) return;
   e.preventDefault();
-  mapwrap.scrollLeft = dragPan.sl - (e.clientX - dragPan.x);
-  mapwrap.scrollTop = dragPan.st - (e.clientY - dragPan.y);
   lastUserPan = performance.now();
+  mapwrap.scrollTop = dragPan.st - (e.clientY - dragPan.y);
+  const nextAz = dragPan.az - (e.clientX - dragPan.x) * 0.0038;
+  if (Math.abs(nextAz - AZ) > 0.02) { AZ = nextAz; applyRotation(); }
 });
-window.addEventListener('pointerup', () => { dragPan = null; mapwrap.classList.remove('dragging'); });
-window.addEventListener('pointercancel', () => { dragPan = null; mapwrap.classList.remove('dragging'); });
+function endDrag() {
+  if (!dragPan) return;
+  dragPan = null;
+  mapwrap.classList.remove('dragging');
+  localStorage.setItem('agentview-az', String(AZ));
+}
+window.addEventListener('pointerup', endDrag);
+window.addEventListener('pointercancel', endDrag);
 mapwrap.addEventListener('wheel', () => { lastUserPan = performance.now(); }, { passive: true });
-
-/* ---------- rotate the city 90° per tap ---------- */
-document.getElementById('rotBtn').onclick = () => {
-  VIEW = (VIEW + 1) % 4;
-  localStorage.setItem('agentview-view', String(VIEW));
-  refreshMap().then(() => {
-    const m = mainId && agents.get(mainId);
-    const cx = m ? m.x : SPAWN.x, cy = m ? m.y : SPAWN.y;
-    mapwrap.scrollTo({ left: cx - mapwrap.clientWidth / 2, top: cy - mapwrap.clientHeight / 2 });
-  });
-};
 
 /* ---------- dark mode ---------- */
 const themeBtn = document.getElementById('themeBtn');
