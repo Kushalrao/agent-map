@@ -119,11 +119,7 @@
   .floorlabel.night { fill: rgba(255,255,255,0.55); }
   .floorlabel.active { fill: #111; font-weight: 700; }
   html.dark .floorlabel.active { fill: #fff; }
-  .bldg { transition: filter 0.18s ease-out; }
-  .bldg:hover {
-    filter: brightness(1.07) drop-shadow(0 0 16px rgba(255, 214, 110, 0.85)) drop-shadow(0 0 5px rgba(255, 255, 255, 0.55));
-    cursor: pointer;
-  }
+  .bldg:hover { filter: url(#bglow); cursor: pointer; }
   .floorglow { animation: glowpulse 0.9s ease-in-out infinite; pointer-events: none; }
   @keyframes glowpulse { 0%,100% { opacity: 0.22; } 50% { opacity: 0.48; } }
   .cloud { animation-name: drift; animation-timing-function: ease-in-out; animation-iteration-count: infinite; animation-direction: alternate; }
@@ -1031,6 +1027,11 @@ function buildMap(root) {
   mapwrap.replaceChildren();
   svg = el('svg', { width, height, viewBox: `0 0 ${width} ${height}` });
   mapwrap.appendChild(svg);
+
+  // SVG-native hover glow (CSS drop-shadow on SVG groups is a no-op in Safari)
+  const defs = el('defs', {}, svg);
+  const flt = el('filter', { id: 'bglow', x: '-40%', y: '-40%', width: '180%', height: '180%' }, defs);
+  el('feDropShadow', { dx: 0, dy: 0, stdDeviation: 7, 'flood-color': '#FFD66E', 'flood-opacity': 0.95 }, flt);
 
   riseKeys = INTRO ? 'all' : new Set(dirs.filter(d => !knownDirs.has(d.key)).map(d => d.key));
   knownDirs = new Set(dirs.map(d => d.key));
