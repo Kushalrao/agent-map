@@ -54,7 +54,8 @@
     font: 13px/1.5 -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
     height: 100vh; overflow: hidden;
   }
-  #mapwrap { width: 100%; height: 100%; overflow: auto; background: var(--bg); }
+  #mapwrap { width: 100%; height: 100%; overflow: auto; background: var(--bg); cursor: grab; user-select: none; -webkit-user-select: none; }
+  #mapwrap.dragging { cursor: grabbing; }
   svg { display: block; }
 
   #picker {
@@ -109,9 +110,14 @@
   @keyframes glowpulse { 0%,100% { opacity: 0.22; } 50% { opacity: 0.48; } }
   .cloud { animation-name: drift; animation-timing-function: ease-in-out; animation-iteration-count: infinite; animation-direction: alternate; }
   @keyframes drift { to { transform: translateX(70px); } }
+  .sway { animation: sway 4.5s ease-in-out infinite alternate; transform-box: fill-box; transform-origin: 50% 100%; }
+  @keyframes sway { from { transform: rotate(-1.6deg); } to { transform: rotate(2.2deg); } }
+  .roam { animation: roam var(--dur, 60s) ease-in-out infinite alternate; animation-delay: var(--delay, 0s); }
+  @keyframes roam { from { transform: translate(0, 0); } to { transform: translate(var(--dx, 0px), var(--dy, 0px)); } }
 
   .agent { transition: opacity 0.3s; }
-  .agent .sprite-g { filter: drop-shadow(0 1.5px 2px rgba(0,0,0,0.3)); }
+  /* halo keeps agents readable even when they pass behind a building */
+  .agent .sprite-g { filter: drop-shadow(0 1.5px 2px rgba(0,0,0,0.35)) drop-shadow(0 0 4px rgba(255,255,255,0.9)); }
   .agent .bubble-bg { fill: var(--bubble-bg); stroke: var(--bubble-border); filter: drop-shadow(0 2px 5px rgba(0,0,0,0.12)); }
   .agent .bubble-text { font-size: 10.5px; font-family: ui-monospace, Menlo, monospace; fill: var(--bubble-text); }
   .agent .bubble-verb { font-weight: 700; }
@@ -899,8 +905,11 @@ const night = () => document.documentElement.classList.contains('dark');
 const shade = (hex, sMul, lMul) => { const [h, s, l] = hexHsl(hex); return hslHex(h, Math.min(1, s * sMul), Math.min(1, l * lMul)); };
 const P = pts => pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
 
-/* warm cartoon-city wall palette */
-const WALLS = ['#E8654A', '#F2A055', '#6FA8B8', '#E8C177', '#9B8FC0', '#D98A8A', '#8FB98B', '#7FA3D1', '#D9A17E', '#C97FA8'];
+/* candy-city palette (reference style): saturated walls, pastel roof slabs, teal glass */
+const WALLS = ['#2FB0C7', '#F27BAD', '#8F7BE8', '#4FC77B', '#4F7BE8', '#F2A055', '#E86A5A', '#C77BE8', '#E8C13F', '#7BD9E8'];
+const ROOFS = ['#F2A0B8', '#A0D9C0', '#C0B8F2', '#F2D9A0', '#A0C4F2', '#F2B8A0', '#B8E8A0', '#E8A0E0'];
+const GLASS = '#7BC9DE', GLASS_D = '#3E8FA3';
+const SKINS = ['#F8C89A', '#C68642', '#8D5524', '#FFDBAC'];
 
 /* draw an isometric box: roof + the two camera-facing walls */
 function isoBox(g, x0, y0, wx, wy, hb, ht, cTop, cLeft, cRight) {
@@ -992,12 +1001,12 @@ function buildMap(root) {
 
 function drawGround(w, h, spanX, spanY, cols, rows, N) {
   // grass world, paved plaza, street grid
-  el('rect', { x: 0, y: 0, width: w, height: h, fill: N ? '#16281E' : '#8FBF6B' }, svg);
+  el('rect', { x: 0, y: 0, width: w, height: h, fill: N ? '#16281E' : '#7FC96B' }, svg);
   const gx0 = -S_ISO, gx1 = spanX, gy0 = -S_ISO, gy1 = spanY;
-  el('polygon', { points: P([isoS(gx0 - 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy1 + 0.6), isoS(gx0 - 0.6, gy1 + 0.6)]), fill: N ? '#2C3140' : '#D8D2C4' }, svg);
+  el('polygon', { points: P([isoS(gx0 - 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy1 + 0.6), isoS(gx0 - 0.6, gy1 + 0.6)]), fill: N ? '#2C3140' : '#C6D3E4' }, svg);
 
-  const asph = N ? '#20242F' : '#6E7683';
-  const dash = N ? '#7A8296' : '#F2E9C8';
+  const asph = N ? '#20242F' : '#8CA3C4';
+  const dash = N ? '#7A8296' : '#F5F8FC';
   for (let gy = 0; gy <= rows; gy++) {
     const y0 = gy * PITCH_Y - S_ISO;
     el('polygon', { points: P([isoS(gx0, y0), isoS(gx1, y0), isoS(gx1, y0 + S_ISO), isoS(gx0, y0 + S_ISO)]), fill: asph }, svg);
@@ -1039,27 +1048,64 @@ function drawGround(w, h, spanX, spanY, cols, rows, N) {
       if (N) el('circle', { cx: p.x, cy: p.y - 54, r: 15, fill: '#FFE28A', opacity: 0.16 }, svg);
     }
   }
-  // parked cars scattered on the grid
-  const nCars = Math.round(cols * rows * 0.8) + 2;
+  // traffic lights at some intersections
+  for (let gy = 0; gy <= rows; gy++) {
+    for (let gx = 0; gx <= cols; gx++) {
+      if ((gx + gy) % 3 !== 1) continue;
+      const p = isoS(gx * PITCH_X - S_ISO - 0.12, gy * PITCH_Y + 0.12);
+      el('rect', { x: p.x - 1.5, y: p.y - 44, width: 3, height: 44, fill: '#3A4152' }, svg);
+      el('rect', { x: p.x - 4, y: p.y - 58, width: 8, height: 16, rx: 2.5, fill: '#2B2F3A' }, svg);
+      el('circle', { cx: p.x, cy: p.y - 54, r: 1.8, fill: '#E05252' }, svg);
+      el('circle', { cx: p.x, cy: p.y - 49.5, r: 1.8, fill: '#F2C21F' }, svg);
+      el('circle', { cx: p.x, cy: p.y - 45, r: 1.8, fill: N ? '#5AE07A' : '#2FA84F' }, svg);
+    }
+  }
+  // sidewalk trees on the block corners
+  for (let gy = 0; gy <= rows; gy++) {
+    for (let gx = 0; gx <= cols; gx++) {
+      if (rnd(gx * 19 + gy * 23) < 0.55) continue;
+      const kinds = ['round', 'tall', 'palm'];
+      drawTreeAt(isoS(gx * PITCH_X + 0.35, gy * PITCH_Y + 0.35), 0.6 + rnd(gx + gy) * 0.35, N, kinds[Math.floor(rnd(gx * 3 + gy * 7) * 3)]);
+    }
+  }
+  // cars cruising the streets
+  const nCars = Math.round(cols * rows * 0.9) + 3;
   for (let i = 0; i < nCars; i++) {
     const col = WALLS[Math.floor(rnd(i + 13) * WALLS.length)];
     if (rnd(i) > 0.5) {
       const gy = Math.floor(rnd(i + 31) * (rows + 1));
-      drawCarIso(rnd(i + 7) * (spanX - 2), gy * PITCH_Y - S_ISO / 2 - 0.28, 'x', col, N);
+      drawCarIso(1 + rnd(i + 7) * (spanX - 3), gy * PITCH_Y - S_ISO / 2 - 0.28, 'x', col, N, i * 3 + 1);
     } else {
       const gx = Math.floor(rnd(i + 47) * (cols + 1));
-      drawCarIso(gx * PITCH_X - S_ISO / 2 + 0.28, rnd(i + 9) * (spanY - 2), 'y', col, N);
+      drawCarIso(gx * PITCH_X - S_ISO / 2 + 0.28, 1 + rnd(i + 9) * (spanY - 3), 'y', col, N, i * 5 + 2);
+    }
+  }
+  // pedestrians strolling the sidewalks
+  const nPeds = Math.round(cols * rows * 1.3) + 6;
+  for (let i = 0; i < nPeds; i++) {
+    if (rnd(i + 1) > 0.5) {
+      const gy = Math.floor(rnd(i + 61) * (rows + 1));
+      drawPedestrian(1 + rnd(i + 17) * (spanX - 3), gy * PITCH_Y - S_ISO - 0.22, 'x', i * 7 + 3, N);
+    } else {
+      const gx = Math.floor(rnd(i + 71) * (cols + 1));
+      drawPedestrian(gx * PITCH_X - S_ISO - 0.22, 1 + rnd(i + 19) * (spanY - 3), 'y', i * 11 + 5, N);
     }
   }
 }
 
-function drawCarIso(ix, iy, axis, col, N) {
+function drawCarIso(ix, iy, axis, col, N, seed) {
   const wx = axis === 'x' ? 1.25 : 0.6, wy = axis === 'x' ? 0.6 : 1.25;
   const body = N ? shade(col, 0.85, 0.5) : col;
   const dark = shade(body, 1, 0.7), darker = shade(body, 1, 0.55);
+  // cars cruise slowly up and down their street
+  const u = (4 + rnd(seed + 3) * 7) * (rnd(seed + 8) > 0.5 ? 1 : -1);
+  const dx = axis === 'x' ? u * K : -u * K, dy = u * K2;
+  const g = el('g', {
+    class: 'roam',
+    style: `--dx:${dx.toFixed(0)}px; --dy:${dy.toFixed(0)}px; --dur:${(30 + rnd(seed) * 40).toFixed(0)}s; --delay:-${(rnd(seed + 5) * 30).toFixed(0)}s`,
+  }, svg);
   const c = isoS(ix + wx / 2, iy + wy / 2);
-  el('ellipse', { cx: c.x, cy: c.y + 3, rx: (wx + wy) * 14, ry: (wx + wy) * 6, fill: '#2B3345', opacity: 0.18 }, svg);
-  const g = el('g', {}, svg);
+  el('ellipse', { cx: c.x, cy: c.y + 3, rx: (wx + wy) * 14, ry: (wx + wy) * 6, fill: '#2B3345', opacity: 0.18 }, g);
   isoBox(g, ix, iy, wx, wy, 2, 13, body, dark, darker);
   const inx = axis === 'x' ? 0.28 : 0.1, iny = axis === 'x' ? 0.1 : 0.28;
   isoBox(g, ix + inx, iy + iny, wx - 2 * inx, wy - 2 * iny, 13, 22, shade(body, 1, 1.12), N ? '#FFE9AE' : '#CFE8F7', N ? '#E8CE8E' : '#AFCFE4');
@@ -1069,15 +1115,42 @@ function drawCarIso(ix, iy, axis, col, N) {
   }
 }
 
-function drawTreeAt(p, s, N) {
+function drawPedestrian(ix, iy, axis, seed, N) {
+  const p = isoS(ix, iy);
+  const u = (1.5 + rnd(seed) * 4) * (rnd(seed + 4) > 0.5 ? 1 : -1);
+  const dx = axis === 'x' ? u * K : -u * K, dy = u * K2;
+  const g = el('g', {
+    class: 'roam',
+    style: `--dx:${dx.toFixed(0)}px; --dy:${dy.toFixed(0)}px; --dur:${(35 + rnd(seed + 2) * 45).toFixed(0)}s; --delay:-${(rnd(seed + 6) * 35).toFixed(0)}s`,
+  }, svg);
+  const outfit = WALLS[Math.floor(rnd(seed + 9) * WALLS.length)];
+  const skin = SKINS[Math.floor(rnd(seed + 11) * SKINS.length)];
+  el('ellipse', { cx: p.x, cy: p.y + 1.5, rx: 4.5, ry: 2, fill: '#2B3345', opacity: 0.2 }, g);
+  el('rect', { x: p.x - 2.6, y: p.y - 11, width: 5.2, height: 9, rx: 2.4, fill: N ? shade(outfit, 0.9, 0.6) : outfit }, g);
+  el('circle', { cx: p.x, cy: p.y - 13.5, r: 2.8, fill: skin }, g);
+}
+
+function drawTreeAt(p, s, N, kind) {
   const g = el('g', { transform: `translate(${p.x} ${p.y}) scale(${s})` }, svg);
   el('ellipse', { cx: 4, cy: 3, rx: 26, ry: 10, fill: '#2B3345', opacity: 0.15 }, g);
-  el('rect', { x: -4, y: -34, width: 8, height: 34, rx: 3, fill: N ? '#4A3A2E' : '#8B6142' }, g);
-  const leaf = N ? '#2E4A3C' : '#9CCB6B', leaf2 = N ? '#3A5C4A' : '#B7DC8B';
-  el('circle', { cx: 0, cy: -50, r: 22, fill: leaf }, g);
-  el('circle', { cx: -15, cy: -38, r: 14, fill: leaf }, g);
-  el('circle', { cx: 15, cy: -38, r: 14, fill: leaf }, g);
-  el('circle', { cx: 0, cy: -45, r: 11, fill: leaf2 }, g);
+  const leaf = N ? '#2E4A3C' : '#63B04E', leaf2 = N ? '#3A5C4A' : '#8FCB6B', leaf3 = N ? '#28422F' : '#3E8A52';
+  const canopy = el('g', { class: 'sway', style: `animation-delay:-${(p.x % 7).toFixed(1)}s` }, g);
+  if (kind === 'palm') {
+    el('path', { d: 'M -2 0 C -4 -22 2 -40 6 -56', stroke: N ? '#4A3A2E' : '#8B6142', 'stroke-width': 6, fill: 'none', 'stroke-linecap': 'round' }, g);
+    for (const [rx, ry, ang] of [[22, 8, -30], [22, 8, 25], [18, 7, -70], [18, 7, 70], [20, 7, 0]]) {
+      el('ellipse', { cx: 6, cy: -58, rx, ry, fill: leaf3, transform: `rotate(${ang} 6 -58)` }, canopy);
+    }
+  } else if (kind === 'tall') {
+    el('rect', { x: -3, y: -44, width: 6, height: 44, rx: 3, fill: N ? '#4A3A2E' : '#8B6142' }, g);
+    el('ellipse', { cx: 0, cy: -62, rx: 15, ry: 24, fill: leaf3 }, canopy);
+    el('ellipse', { cx: 0, cy: -70, rx: 10, ry: 15, fill: leaf }, canopy);
+  } else {
+    el('rect', { x: -4, y: -34, width: 8, height: 34, rx: 3, fill: N ? '#4A3A2E' : '#8B6142' }, g);
+    el('circle', { cx: 0, cy: -50, r: 22, fill: leaf }, canopy);
+    el('circle', { cx: -15, cy: -38, r: 14, fill: leaf3 }, canopy);
+    el('circle', { cx: 15, cy: -38, r: 14, fill: leaf }, canopy);
+    el('circle', { cx: 0, cy: -45, r: 11, fill: leaf2 }, canopy);
+  }
 }
 
 function drawParkLot(gx, gy, N) {
@@ -1086,12 +1159,20 @@ function drawParkLot(gx, gy, N) {
     points: P([isoS(bx + 0.1, by + 0.1), isoS(bx + W_ISO - 0.1, by + 0.1), isoS(bx + W_ISO - 0.1, by + D_ISO - 0.1), isoS(bx + 0.1, by + D_ISO - 0.1)]),
     fill: N ? '#22402C' : '#9CCB6B',
   }, svg);
+  // winding path
+  const p1 = isoS(bx + 0.2, by + D_ISO * 0.55), p2 = isoS(bx + W_ISO * 0.5, by + D_ISO * 0.35), p3 = isoS(bx + W_ISO - 0.15, by + D_ISO * 0.7);
+  el('path', { d: `M ${p1.x} ${p1.y} Q ${p2.x} ${p2.y} ${p3.x} ${p3.y}`, stroke: N ? '#3A4152' : '#E8DFC8', 'stroke-width': 9, fill: 'none', 'stroke-linecap': 'round', opacity: 0.85 }, svg);
   const pond = isoS(bx + W_ISO * 0.62, by + D_ISO * 0.6);
   el('ellipse', { cx: pond.x, cy: pond.y, rx: 26, ry: 12, fill: N ? '#22334D' : '#7FB8D9' }, svg);
   el('ellipse', { cx: pond.x - 6, cy: pond.y - 2, rx: 8, ry: 3, fill: N ? '#31456B' : '#A8D4EC' }, svg);
-  drawTreeAt(isoS(bx + 0.7, by + 0.7), 1, N);
-  drawTreeAt(isoS(bx + W_ISO - 0.8, by + 0.9), 0.8, N);
-  drawTreeAt(isoS(bx + 1.1, by + D_ISO - 0.6), 0.9, N);
+  drawTreeAt(isoS(bx + 0.7, by + 0.7), 1, N, 'round');
+  drawTreeAt(isoS(bx + W_ISO - 0.8, by + 0.9), 0.85, N, 'palm');
+  drawTreeAt(isoS(bx + 1.1, by + D_ISO - 0.6), 0.9, N, 'tall');
+  drawTreeAt(isoS(bx + 2.2, by + D_ISO - 0.4), 0.7, N, 'round');
+  for (let fl = 0; fl < 7; fl++) {
+    const fp = isoS(bx + 0.3 + rnd(gx * 31 + fl) * (W_ISO - 0.6), by + 0.3 + rnd(gy * 37 + fl * 3) * (D_ISO - 0.6));
+    el('circle', { cx: fp.x, cy: fp.y, r: 2.2, fill: ['#F26AA0', '#F2C21F', '#FFFFFF', '#E86A5A'][fl % 4], opacity: N ? 0.5 : 0.95 }, svg);
+  }
   isoBox(svg, bx + 1.9, by + 1.9, 0.7, 0.22, 4, 10, N ? '#6E5A45' : '#B08A5F', N ? '#5A4A38' : '#96744E', N ? '#4A3D2E' : '#7E6242');
 }
 
@@ -1137,7 +1218,8 @@ function drawBuildingIso(b, i, gx, gy, N) {
   let wall = WALLS[i % WALLS.length];
   if (N) wall = shade(wall, 0.8, 0.45);
   const faceR = shade(wall, 1.02, N ? 0.55 : 0.68);
-  const roof = shade(wall, 0.7, N ? 0.62 : 1.18);
+  let roof = ROOFS[Math.floor(rnd(i * 7 + 2) * ROOFS.length)];
+  if (N) roof = shade(roof, 0.75, 0.5);
   const trim = shade(wall, 1.05, N ? 0.78 : 0.72);
   const g = el('g', {}, svg);
   el('title', {}, g).textContent = b.full;
@@ -1151,11 +1233,15 @@ function drawBuildingIso(b, i, gx, gy, N) {
     fill: '#2B3345', opacity: N ? 0.35 : 0.16,
   }, g);
 
-  // the volume + roof trim
+  // the volume + wide pastel roof slab with an inset deck
   isoBox(g, bx, by, W_ISO, D_ISO, 0, H, roof, wall, faceR);
   el('polygon', {
     points: P([{ x: A.x, y: A.y - H }, { x: B.x, y: B.y - H }, { x: C.x, y: C.y - H }, { x: D.x, y: D.y - H }]),
-    fill: 'none', stroke: trim, 'stroke-width': 2.5,
+    fill: 'none', stroke: shade(roof, 1, N ? 0.75 : 0.85), 'stroke-width': 2.5,
+  }, g);
+  el('polygon', {
+    points: P([isoS(bx + 0.28, by + 0.28), isoS(bx + W_ISO - 0.28, by + 0.28), isoS(bx + W_ISO - 0.28, by + D_ISO - 0.28), isoS(bx + 0.28, by + D_ISO - 0.28)].map(p => ({ x: p.x, y: p.y - H }))),
+    fill: shade(roof, 1, N ? 1.12 : 1.08),
   }, g);
 
   // face helpers: point at fraction t along a wall, elevated h px
@@ -1178,6 +1264,19 @@ function drawBuildingIso(b, i, gx, gy, N) {
     const gc = ['#F26AA0', '#6AE0C8', '#F2C21F'][Math.floor(rnd(i * 3) * 3)];
     el('polygon', { points: P([PR(0.15, 4), PR(0.5, 8), PR(0.5, 15), PR(0.15, 10)]), fill: gc, opacity: 0.75 }, g);
     el('polygon', { points: P([PR(0.52, 6), PR(0.8, 4), PR(0.8, 12), PR(0.52, 13)]), fill: shade(gc, 1, 1.2), opacity: 0.7 }, g);
+  }
+
+  // square "brand" plate with the folder's initial, mounted high on the facade
+  if (H > 70) {
+    const h1 = H - 12, h0 = H - 36;
+    el('polygon', { points: P([PF(0.68, h1), PF(0.96, h1), PF(0.96, h0), PF(0.68, h0)]), fill: N ? '#E8ECF2' : '#FFFFFF', stroke: shade(wall, 1, 0.5), 'stroke-width': 1.5 }, g);
+    const lp2 = PF(0.82, (h0 + h1) / 2 - 5);
+    const it = el('text', {
+      x: lp2.x, y: lp2.y, 'text-anchor': 'middle',
+      transform: `rotate(26.57 ${lp2.x} ${lp2.y})`,
+      style: `font: 800 13px ui-monospace, Menlo, monospace; fill: ${shade(wall, 1, 0.45)}`,
+    }, g);
+    it.textContent = b.name.slice(0, 2).toUpperCase();
   }
 
   // floors, bottom-up: one per file
@@ -1234,19 +1333,23 @@ function drawBuildingIso(b, i, gx, gy, N) {
 function drawFloorIso(g, bi, fi, f, PF, PR, ctx, N) {
   const hb = LOBBY_HZ + fi * FLOOR_HZ, ht = hb + FLOOR_HZ;
   const wins = [];
-  for (const [wi, [t0, t1]] of [[0, [0.05, 0.19]], [1, [0.24, 0.38]]].entries()) {
+  // vertical glass strips across the facade, reference style
+  for (let wi = 0; wi < 4; wi++) {
+    const t0 = 0.06 + wi * 0.135, t1 = t0 + 0.085;
     const lit = N && rnd(bi * 131 + fi * 17 + wi * 7) > 0.55;
     wins.push(el('polygon', {
-      points: P([PF(t0, ht - 4), PF(t1, ht - 4), PF(t1, hb + 3), PF(t0, hb + 3)]),
-      fill: lit ? '#FFD98A' : (N ? '#25314A' : '#D6ECF7'),
-      stroke: ctx.trim, 'stroke-width': 1.1,
+      points: P([PF(t0, ht - 2.5), PF(t1, ht - 2.5), PF(t1, hb + 2.5), PF(t0, hb + 2.5)]),
+      fill: lit ? '#FFD98A' : (N ? '#25314A' : GLASS),
+      stroke: lit ? 'none' : GLASS_D, 'stroke-width': 0.8,
     }, g));
   }
-  const litR = N && rnd(bi * 131 + fi * 17 + 91) > 0.6;
-  wins.push(el('polygon', {
-    points: P([PR(0.22, ht - 5), PR(0.55, ht - 5), PR(0.55, hb + 4), PR(0.22, hb + 4)]),
-    fill: litR ? '#EDC372' : (N ? '#1D2740' : 'rgba(0,0,0,0.16)'),
-  }, g));
+  for (const [si, [t0, t1]] of [[0, [0.18, 0.32]], [1, [0.44, 0.58]]].entries()) {
+    const litR = N && rnd(bi * 131 + fi * 17 + 91 + si * 5) > 0.6;
+    wins.push(el('polygon', {
+      points: P([PR(t0, ht - 3), PR(t1, ht - 3), PR(t1, hb + 3), PR(t0, hb + 3)]),
+      fill: litR ? '#EDC372' : (N ? '#1D2740' : shade(GLASS, 1, 0.72)),
+    }, g));
+  }
 
   const lp = PF(0.69, hb + FLOOR_HZ / 2 - 4);
   const label = el('text', {
@@ -1335,6 +1438,11 @@ function makeAgent(id) {
   const scale = isKid ? KID_SCALE : 1;
 
   const g = el('g', { class: 'agent' }, agentLayer);
+  // ground marker so the agent stays findable behind buildings
+  el('ellipse', {
+    cx: 0, cy: 3, rx: isKid ? 8 : 12, ry: isKid ? 3.2 : 4.6,
+    fill: '#FFFFFF', opacity: 0.35, stroke: '#FF6319', 'stroke-width': 1.5, 'stroke-opacity': 0.55,
+  }, g);
   const spriteG = el('g', { class: 'sprite-g', transform: `scale(${scale})` }, g);
   const flip = el('g', {}, spriteG);
   const pose = el('g', {}, flip);
@@ -1597,6 +1705,19 @@ for (const [key, def] of Object.entries(CHARACTERS)) {
 }
 pickBtn.replaceChildren(miniSprite(CHARACTERS[charKey]));
 pickBtn.onclick = () => pickMenu.classList.toggle('open');
+
+/* ---------- drag to pan around the city ---------- */
+let dragPan = null;
+mapwrap.addEventListener('pointerdown', (e) => {
+  dragPan = { x: e.clientX, y: e.clientY, sl: mapwrap.scrollLeft, st: mapwrap.scrollTop };
+  mapwrap.classList.add('dragging');
+});
+window.addEventListener('pointermove', (e) => {
+  if (!dragPan) return;
+  mapwrap.scrollLeft = dragPan.sl - (e.clientX - dragPan.x);
+  mapwrap.scrollTop = dragPan.st - (e.clientY - dragPan.y);
+});
+window.addEventListener('pointerup', () => { dragPan = null; mapwrap.classList.remove('dragging'); });
 
 /* ---------- dark mode ---------- */
 const themeBtn = document.getElementById('themeBtn');
