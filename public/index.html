@@ -1305,7 +1305,7 @@ function drawBuildingIso(b, i, gx, gy, N, seq) {
   // buildings keep their daytime colors in dark mode — only the sky and windows change
   let wall = WALLS[i % WALLS.length];
   if (style === 'eiffel') wall = '#A87C58';   // riveted iron
-  const faceR = shade(wall, 1.02, 0.68);
+  const faceR = shade(wall, 1, 0.93);   // both faces read as the same color, hint of depth only
   const roof = ROOFS[Math.floor(rnd(i * 7 + 2) * ROOFS.length)];
   const trim = shade(wall, 1.05, 0.72);
   const g = el('g', {}, svg);
@@ -1564,7 +1564,7 @@ function drawFloorIso(g, bi, fi, f, PFt, PRt, ctx, N) {
       const litR = N && rnd(bi * 131 + fi * 17 + 91 + si * 5) > 0.6;
       wins.push(el('polygon', {
         points: P([PRt(t0, ht - 3), PRt(t1, ht - 3), PRt(t1, hb + 3), PRt(t0, hb + 3)]),
-        fill: litR ? '#EDC372' : (N ? '#1D2740' : shade(GLASS, 1, 0.72)),
+        fill: litR ? '#FFD98A' : (N ? '#25314A' : shade(GLASS, 1, 0.9)),
       }, g));
     }
   }
