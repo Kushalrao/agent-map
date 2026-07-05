@@ -1272,13 +1272,24 @@ function drawWeather(w, h, spanX, spanY, N) {
   }
 }
 
+/* six structure types; the tallest towers go art-deco, the rest mix it up */
+function styleFor(i, floors) {
+  if (floors >= 12) return 'empire';
+  const pool = floors >= 7
+    ? ['box', 'eiffel', 'clock', 'pagoda', 'dome', 'box']
+    : ['box', 'pagoda', 'dome', 'clock', 'box', 'dome'];
+  return pool[Math.floor(rnd(i * 31 + 5) * pool.length)];
+}
+
 function drawBuildingIso(b, i, gx, gy, N, seq) {
   const bx = gx * PITCH_X, by = gy * PITCH_Y;
   const floors = b.files.length;
   const H = LOBBY_HZ + floors * FLOOR_HZ + 8;
   const rising = riseKeys === 'all' || (riseKeys && riseKeys.has(b.key));
+  const style = styleFor(i, floors);
   let wall = WALLS[i % WALLS.length];
   if (N) wall = shade(wall, 0.8, 0.45);
+  if (style === 'eiffel') wall = N ? '#5A4634' : '#9E7350';   // riveted iron
   const faceR = shade(wall, 1.02, N ? 0.55 : 0.68);
   let roof = ROOFS[Math.floor(rnd(i * 7 + 2) * ROOFS.length)];
   if (N) roof = shade(roof, 0.75, 0.5);
@@ -1287,53 +1298,161 @@ function drawBuildingIso(b, i, gx, gy, N, seq) {
   el('title', {}, g).textContent = b.full;
 
   const { A, B, C, D } = cornersOf(bx, by, W_ISO, D_ISO);
-  const ang = Math.atan2(C.y - D.y, C.x - D.x) * 180 / Math.PI;   // slope of the front wall
-  // cast shadow to the lower-left
-  const sh = Math.min(H, 170);
-  const sv = { x: -sh * 0.5, y: sh * 0.25 };
+  const ang = Math.atan2(C.y - D.y, C.x - D.x) * 180 / Math.PI;
+
+  // silhouette: width factor by height gives each structure its shape
+  let wAt = () => 1;
+  if (style === 'eiffel') wAt = h => Math.max(0.34, 1 - 0.62 * (h / H));
+  else if (style === 'empire') wAt = h => (h < H * 0.52 ? 1 : h < H * 0.78 ? 0.78 : 0.6);
+  else if (style === 'pagoda') wAt = h => Math.max(0.62, 1 - 0.22 * (h / H));
+  // taper anchor: empire steps back keeping the ladder edge flush; others shrink to center
+  const ax = style === 'empire' ? bx : bx + W_ISO / 2;
+  const ay = style === 'empire' ? by + D_ISO : by + D_ISO / 2;
+  const shrPt = (wx, wy, f, h) => {
+    const p = isoS(ax + (wx - ax) * f, ay + (wy - ay) * f);
+    p.y -= h;
+    return p;
+  };
+  const FP = (wx, wy, h) => shrPt(wx, wy, wAt(h), h);
+  const PFt = (t, h) => FP(bx + t * W_ISO, by + D_ISO, h);
+  const PRt = (t, h) => FP(bx + W_ISO, by + D_ISO * (1 - t), h);
+
+  // cast shadow
+  const shd = Math.min(H, 170);
+  const sv = { x: -shd * 0.5, y: shd * 0.25 };
   el('polygon', {
     points: P([D, C, { x: C.x + sv.x, y: C.y + sv.y }, { x: D.x + sv.x, y: D.y + sv.y }]),
     fill: '#2B3345', opacity: N ? 0.35 : 0.16,
   }, g);
 
-  // the volume + wide pastel roof slab with an inset deck
-  isoBox(g, bx, by, W_ISO, D_ISO, 0, H, roof, wall, faceR);
-  el('polygon', {
-    points: P([{ x: A.x, y: A.y - H }, { x: B.x, y: B.y - H }, { x: C.x, y: C.y - H }, { x: D.x, y: D.y - H }]),
-    fill: 'none', stroke: shade(roof, 1, N ? 0.75 : 0.85), 'stroke-width': 2.5,
-  }, g);
-  el('polygon', {
-    points: P([isoS(bx + 0.28, by + 0.28), isoS(bx + W_ISO - 0.28, by + 0.28), isoS(bx + W_ISO - 0.28, by + D_ISO - 0.28), isoS(bx + 0.28, by + D_ISO - 0.28)].map(p => ({ x: p.x, y: p.y - H }))),
-    fill: shade(roof, 1, N ? 1.12 : 1.08),
-  }, g);
+  // ---- the structure ----
+  const topD = FP(bx, by + D_ISO, H), topC = FP(bx + W_ISO, by + D_ISO, H);
+  const topB = FP(bx + W_ISO, by, H), topA = FP(bx, by, H);
+  const rc = isoS(bx + W_ISO / 2, by + D_ISO / 2);
+  let capH = 0;   // extra structure above the roofline, lifts the name pill
 
-  // face helpers: point at fraction t along a wall, elevated h px
-  const PF = (t, h) => ({ x: D.x + (C.x - D.x) * t, y: D.y + (C.y - D.y) * t - h });   // front-left wall
-  const PR = (t, h) => ({ x: C.x + (B.x - C.x) * t, y: C.y + (B.y - C.y) * t - h });   // front-right wall
+  if (style === 'empire') {
+    for (const [h0, h1, f] of [[0, H * 0.52, 1], [H * 0.52, H * 0.78, 0.78], [H * 0.78, H, 0.6]]) {
+      isoBox(g, bx, by + D_ISO * (1 - f), W_ISO * f, D_ISO * f, h0, h1, roof, wall, faceR);
+    }
+    const sp = FP(bx + W_ISO * 0.3, by + D_ISO * 0.5, H);
+    el('rect', { x: sp.x - 3, y: sp.y - 24, width: 6, height: 24, fill: trim }, g);
+    el('rect', { x: sp.x - 1, y: sp.y - 44, width: 2, height: 22, fill: trim }, g);
+    el('circle', { cx: sp.x, cy: sp.y - 45, r: 2.5, fill: N ? '#FF6B6B' : '#E8ECF2' }, g);
+    capH = 50;
+  } else if (style === 'eiffel' || style === 'pagoda') {
+    el('polygon', { points: P([D, C, topC, topD]), fill: wall }, g);
+    el('polygon', { points: P([C, B, topB, topC]), fill: faceR }, g);
+    el('polygon', { points: P([topA, topB, topC, topD]), fill: roof }, g);
+    if (style === 'eiffel') {
+      for (const [t0, t1] of [[0.06, 0.94], [0.94, 0.06]]) {   // lattice braces
+        const p0 = PFt(t0, 2), p1 = PFt(t1, H * 0.55);
+        el('line', { x1: p0.x, y1: p0.y, x2: p1.x, y2: p1.y, stroke: shade(wall, 1, 0.55), 'stroke-width': 2, opacity: 0.55 }, g);
+      }
+      const a0 = PFt(0.18, 2), a1 = PFt(0.5, LOBBY_HZ + 12), a2 = PFt(0.82, 2);
+      el('path', { d: `M ${a0.x} ${a0.y} Q ${a1.x} ${a1.y} ${a2.x} ${a2.y}`, stroke: shade(wall, 1, 0.5), 'stroke-width': 3, fill: 'none' }, g);
+      const dl = PFt(-0.14, H * 0.55), dr = PFt(1.14, H * 0.55);   // observation deck
+      el('polygon', { points: P([dl, dr, { x: dr.x, y: dr.y + 5 }, { x: dl.x, y: dl.y + 5 }]), fill: trim }, g);
+      const sp = FP(bx + W_ISO / 2, by + D_ISO / 2, H);
+      el('rect', { x: sp.x - 1.5, y: sp.y - 28, width: 3, height: 28, fill: wall }, g);
+      el('circle', { cx: sp.x, cy: sp.y - 30, r: 2.5, fill: N ? '#FFE28A' : shade(wall, 1, 0.6) }, g);
+      capH = 34;
+    } else {
+      for (let k = 1; k <= floors + 1; k++) {   // pagoda eaves at every floor
+        const eh = Math.min(LOBBY_HZ + k * FLOOR_HZ, H);
+        const f2 = Math.min(1.1, wAt(eh) + 0.17);
+        const eD = shrPt(bx, by + D_ISO, f2, eh), eC = shrPt(bx + W_ISO, by + D_ISO, f2, eh);
+        const eB = shrPt(bx + W_ISO, by, f2, eh), eA = shrPt(bx, by, f2, eh);
+        el('polygon', { points: P([eA, eB, eC, eD]), fill: roof }, g);
+        el('polygon', { points: P([eD, eC, { x: eC.x, y: eC.y + 3.5 }, { x: eD.x, y: eD.y + 3.5 }]), fill: shade(roof, 1, 0.75) }, g);
+        el('polygon', { points: P([eC, eB, { x: eB.x, y: eB.y + 3.5 }, { x: eC.x, y: eC.y + 3.5 }]), fill: shade(roof, 1, 0.6) }, g);
+      }
+      const fp = FP(bx + W_ISO / 2, by + D_ISO / 2, H);
+      el('rect', { x: fp.x - 1.2, y: fp.y - 14, width: 2.4, height: 14, fill: trim }, g);
+      el('circle', { cx: fp.x, cy: fp.y - 16, r: 3.5, fill: N ? '#FFE28A' : '#F2C21F' }, g);
+      capH = 22;
+    }
+  } else {
+    isoBox(g, bx, by, W_ISO, D_ISO, 0, H, roof, wall, faceR);
+    el('polygon', {
+      points: P([{ x: A.x, y: A.y - H }, { x: B.x, y: B.y - H }, { x: C.x, y: C.y - H }, { x: D.x, y: D.y - H }]),
+      fill: 'none', stroke: shade(roof, 1, N ? 0.75 : 0.85), 'stroke-width': 2.5,
+    }, g);
+    if (style === 'dome') {
+      const dc = { x: rc.x, y: rc.y - H };
+      el('path', { d: `M ${dc.x - 26} ${dc.y} A 26 26 0 0 1 ${dc.x + 26} ${dc.y} Z`, fill: shade(roof, 1.1, N ? 0.95 : 1.15) }, g);
+      el('path', { d: `M ${dc.x - 26} ${dc.y} A 26 26 0 0 1 ${dc.x - 4} ${dc.y - 25.7}`, stroke: shade(roof, 1, 1.3), 'stroke-width': 3, fill: 'none' }, g);
+      el('rect', { x: dc.x - 1.5, y: dc.y - 35, width: 3, height: 10, fill: trim }, g);
+      el('circle', { cx: dc.x, cy: dc.y - 36, r: 3, fill: trim }, g);
+      for (const t of [0.06, 0.2, 0.34, 0.48]) {   // lobby columns
+        el('polygon', { points: P([PFt(t, LOBBY_HZ - 2), PFt(t + 0.055, LOBBY_HZ - 2), PFt(t + 0.055, 2), PFt(t, 2)]), fill: shade(wall, 1, N ? 1.25 : 1.2) }, g);
+      }
+      capH = 40;
+    } else if (style === 'clock') {
+      const apex = { x: rc.x, y: rc.y - H - 42 };
+      el('polygon', { points: P([topD, topC, apex]), fill: shade(roof, 1, 0.95) }, g);
+      el('polygon', { points: P([topC, topB, apex]), fill: shade(roof, 1, 0.68) }, g);
+      el('circle', { cx: apex.x, cy: apex.y - 3, r: 2.5, fill: N ? '#FFE28A' : trim }, g);
+      const ck = PFt(0.5, H - 16);
+      el('circle', { cx: ck.x, cy: ck.y, r: 10, fill: N ? '#F5E9C8' : '#FFFFFF', stroke: trim, 'stroke-width': 2 }, g);
+      el('rect', { x: ck.x - 0.9, y: ck.y - 8, width: 1.8, height: 16, rx: 0.9, fill: '#2B2F3A', class: 'spin', style: '--wdur:16s' }, g);
+      capH = 48;
+    } else {
+      // classic block keeps its roof deck + rooftop life
+      el('polygon', {
+        points: P([isoS(bx + 0.28, by + 0.28), isoS(bx + W_ISO - 0.28, by + 0.28), isoS(bx + W_ISO - 0.28, by + D_ISO - 0.28), isoS(bx + 0.28, by + D_ISO - 0.28)].map(p => ({ x: p.x, y: p.y - H }))),
+        fill: shade(roof, 1, N ? 1.12 : 1.08),
+      }, g);
+      const r = rnd(i * 17 + 3);
+      if (r > 0.6) {
+        isoBox(g, bx + W_ISO - 1.3, by + 0.4, 0.85, 0.85, H + 6, H + 30, N ? '#3A2E24' : '#8B6142', N ? '#4A3A2E' : '#A8795A', N ? '#3E3026' : '#96684A');
+        const tc = isoS(bx + W_ISO - 0.875, by + 0.825);
+        el('polygon', { points: P([{ x: tc.x - 20, y: tc.y - H - 30 }, { x: tc.x, y: tc.y - H - 44 }, { x: tc.x + 20, y: tc.y - H - 30 }]), fill: N ? '#332620' : '#7E5C40' }, g);
+        capH = 46;
+      } else if (r > 0.35) {
+        el('polygon', { points: P([isoS(bx + 0.4, by + 0.4), isoS(bx + 1.8, by + 0.4), isoS(bx + 1.8, by + 1.4), isoS(bx + 0.4, by + 1.4)].map(p => ({ x: p.x, y: p.y - H }))), fill: N ? '#22402C' : '#8FC177' }, g);
+        const t1 = isoS(bx + 0.9, by + 0.9), t2 = isoS(bx + 1.5, by + 1.1);
+        el('circle', { cx: t1.x, cy: t1.y - H - 8, r: 8, fill: N ? '#2E4A3C' : '#9CCB6B' }, g);
+        el('circle', { cx: t2.x, cy: t2.y - H - 6, r: 6, fill: N ? '#3A5C4A' : '#B7DC8B' }, g);
+      } else {
+        isoBox(g, bx + W_ISO - 1.1, by + D_ISO - 1.0, 0.6, 0.5, H, H + 9, trim, shade(trim, 1, 0.8), shade(trim, 1, 0.65));
+        const ap = isoS(bx + 0.5, by + 0.5);
+        el('rect', { x: ap.x - 1.5, y: ap.y - H - 26, width: 3, height: 26, fill: trim }, g);
+        el('circle', { cx: ap.x, cy: ap.y - H - 28, r: 3.5, fill: N ? '#FF6B6B' : trim }, g);
+        capH = 30;
+      }
+      const gi = el('text', {
+        x: rc.x, y: rc.y - H + 12, 'text-anchor': 'middle',
+        transform: `rotate(${ang.toFixed(1)} ${rc.x} ${rc.y - H + 12})`,
+        style: `font: 800 30px ui-monospace, Menlo, monospace; fill: ${N ? '#FFFFFF14' : '#00000018'}`,
+      }, g);
+      gi.textContent = b.name[0].toUpperCase();
+    }
+  }
 
-  // lobby: door with light + striped awning on the front wall
-  el('polygon', { points: P([PF(0.62, 0), PF(0.84, 0), PF(0.84, 15), PF(0.62, 15)]), fill: shade(wall, 1, 0.45) }, g);
-  const dl = PF(0.8, 8);
+  // lobby: door with light + striped awning
+  el('polygon', { points: P([PFt(0.62, 0), PFt(0.84, 0), PFt(0.84, 15), PFt(0.62, 15)]), fill: shade(wall, 1, 0.45) }, g);
+  const dl = PFt(0.8, 8);
   el('circle', { cx: dl.x, cy: dl.y, r: 1.6, fill: '#FFD98A' }, g);
   for (let s = 0; s < 4; s++) {
     el('polygon', {
-      points: P([PF(0.60 + s * 0.065, 15), PF(0.665 + s * 0.065, 15), PF(0.665 + s * 0.065, 20), PF(0.60 + s * 0.065, 20)]),
+      points: P([PFt(0.60 + s * 0.065, 15), PFt(0.665 + s * 0.065, 15), PFt(0.665 + s * 0.065, 20), PFt(0.60 + s * 0.065, 20)]),
       fill: s % 2 ? (N ? '#8A93A6' : '#F2EFE4') : trim,
     }, g);
   }
 
   // graffiti tag on the shadowed wall of some buildings
-  if (rnd(i * 29 + 7) > 0.6) {
+  if (rnd(i * 29 + 7) > 0.6 && style !== 'eiffel') {
     const gc = ['#F26AA0', '#6AE0C8', '#F2C21F'][Math.floor(rnd(i * 3) * 3)];
-    el('polygon', { points: P([PR(0.15, 4), PR(0.5, 8), PR(0.5, 15), PR(0.15, 10)]), fill: gc, opacity: 0.75 }, g);
-    el('polygon', { points: P([PR(0.52, 6), PR(0.8, 4), PR(0.8, 12), PR(0.52, 13)]), fill: shade(gc, 1, 1.2), opacity: 0.7 }, g);
+    el('polygon', { points: P([PRt(0.15, 4), PRt(0.5, 8), PRt(0.5, 15), PRt(0.15, 10)]), fill: gc, opacity: 0.75 }, g);
+    el('polygon', { points: P([PRt(0.52, 6), PRt(0.8, 4), PRt(0.8, 12), PRt(0.52, 13)]), fill: shade(gc, 1, 1.2), opacity: 0.7 }, g);
   }
 
-  // square "brand" plate with the folder's initial, mounted high on the facade
-  if (H > 70) {
+  // square "brand" plate with the folder's initial
+  if (H > 70 && style !== 'eiffel') {
     const h1 = H - 12, h0 = H - 36;
-    el('polygon', { points: P([PF(0.68, h1), PF(0.96, h1), PF(0.96, h0), PF(0.68, h0)]), fill: N ? '#E8ECF2' : '#FFFFFF', stroke: shade(wall, 1, 0.5), 'stroke-width': 1.5 }, g);
-    const lp2 = PF(0.82, (h0 + h1) / 2 - 5);
+    el('polygon', { points: P([PFt(0.68, h1), PFt(0.96, h1), PFt(0.96, h0), PFt(0.68, h0)]), fill: N ? '#E8ECF2' : '#FFFFFF', stroke: shade(wall, 1, 0.5), 'stroke-width': 1.5 }, g);
+    const lp2 = PFt(0.82, (h0 + h1) / 2 - 5);
     const it = el('text', {
       x: lp2.x, y: lp2.y, 'text-anchor': 'middle',
       transform: `rotate(${ang.toFixed(1)} ${lp2.x} ${lp2.y})`,
@@ -1344,52 +1463,32 @@ function drawBuildingIso(b, i, gx, gy, N, seq) {
 
   // floors, bottom-up: one per file
   const ctx = {
-    trim, ang,
+    trim, ang, wAt,
     streetIso: { x: bx + W_ISO * 0.15, y: by + D_ISO + S_ISO * 0.45 },
     vx: bx - S_ISO / 2,
   };
   ctx.base = isoS(ctx.streetIso.x, ctx.streetIso.y);
-  b.files.forEach((f, fi) => stations.set(f.path, drawFloorIso(g, i, fi, f, PF, PR, ctx, N)));
+  b.files.forEach((f, fi) => stations.set(f.path, drawFloorIso(g, i, fi, f, PFt, PRt, ctx, N)));
 
-  // rooftop life: water tower / roof garden / AC + antenna
-  const r = rnd(i * 17 + 3);
-  if (r > 0.6) {
-    const t = isoBox(g, bx + W_ISO - 1.3, by + 0.4, 0.85, 0.85, H + 6, H + 30, N ? '#3A2E24' : '#8B6142', N ? '#4A3A2E' : '#A8795A', N ? '#3E3026' : '#96684A');
-    const tc = isoS(bx + W_ISO - 0.875, by + 0.825);
-    el('polygon', { points: P([{ x: tc.x - 20, y: tc.y - H - 30 }, { x: tc.x, y: tc.y - H - 44 }, { x: tc.x + 20, y: tc.y - H - 30 }]), fill: N ? '#332620' : '#7E5C40' }, g);
-  } else if (r > 0.35) {
-    el('polygon', { points: P([isoS(bx + 0.4, by + 0.4), isoS(bx + 1.8, by + 0.4), isoS(bx + 1.8, by + 1.4), isoS(bx + 0.4, by + 1.4)].map(p => ({ x: p.x, y: p.y - H }))), fill: N ? '#22402C' : '#8FC177' }, g);
-    const t1 = isoS(bx + 0.9, by + 0.9), t2 = isoS(bx + 1.5, by + 1.1);
-    el('circle', { cx: t1.x, cy: t1.y - H - 8, r: 8, fill: N ? '#2E4A3C' : '#9CCB6B' }, g);
-    el('circle', { cx: t2.x, cy: t2.y - H - 6, r: 6, fill: N ? '#3A5C4A' : '#B7DC8B' }, g);
-  } else {
-    isoBox(g, bx + W_ISO - 1.1, by + D_ISO - 1.0, 0.6, 0.5, H, H + 9, trim, shade(trim, 1, 0.8), shade(trim, 1, 0.65));
-    const ap = isoS(bx + 0.5, by + 0.5);
-    el('rect', { x: ap.x - 1.5, y: ap.y - H - 26, width: 3, height: 26, fill: trim }, g);
-    el('circle', { cx: ap.x, cy: ap.y - H - 28, r: 3.5, fill: N ? '#FF6B6B' : trim }, g);
-  }
-
-  // roof sign with the folder name + giant painted initial
-  const rc = isoS(bx + W_ISO / 2, by + D_ISO / 2);
-  const gi = el('text', {
-    x: rc.x, y: rc.y - H + 12, 'text-anchor': 'middle',
-    transform: `rotate(${ang.toFixed(1)} ${rc.x} ${rc.y - H + 12})`,
-    style: `font: 800 30px ui-monospace, Menlo, monospace; fill: ${N ? '#FFFFFF14' : '#00000018'}`,
-  }, g);
-  gi.textContent = b.name[0].toUpperCase();
+  // roof sign with the folder name
   const sw = 16 + b.name.length * 6.4;
-  el('rect', { x: rc.x - sw / 2, y: rc.y - H - 9, width: sw, height: 15, rx: 7, fill: N ? '#101828' : '#2B2F3A', opacity: 0.92 }, g);
-  const t = el('text', { class: 'signtext', x: rc.x, y: rc.y - H + 2, 'text-anchor': 'middle' }, g);
+  el('rect', { x: rc.x - sw / 2, y: rc.y - H - 9 - capH, width: sw, height: 15, rx: 7, fill: N ? '#101828' : '#2B2F3A', opacity: 0.92 }, g);
+  const t = el('text', { class: 'signtext', x: rc.x, y: rc.y - H + 2 - capH, 'text-anchor': 'middle' }, g);
   t.textContent = b.name;
   el('title', {}, t).textContent = b.full;
 
-  // ladder up the front wall
-  const lf = PF(0.15, 0);
+  // ladder tracks the wall, even when the structure tapers
   const lcol = N ? '#5A6273' : '#4E5560';
-  el('rect', { x: lf.x - 5, y: lf.y - H + 6, width: 2.4, height: H - 6, fill: lcol }, g);
-  el('rect', { x: lf.x + 3, y: lf.y - H + 6, width: 2.4, height: H - 6, fill: lcol }, g);
-  for (let ry = lf.y - 6; ry > lf.y - H + 8; ry -= 8) {
-    el('rect', { x: lf.x - 5, y: ry, width: 10.4, height: 2, fill: lcol }, g);
+  const hs = [0];
+  for (let k = 0; k <= floors; k++) hs.push(Math.min(LOBBY_HZ + k * FLOOR_HZ, H));
+  hs.push(H - 2);
+  for (const tt of [0.115, 0.185]) {
+    const dpath = hs.map((h, j) => `${j ? 'L' : 'M'} ${PFt(tt, h).x.toFixed(1)} ${PFt(tt, h).y.toFixed(1)}`).join(' ');
+    el('path', { d: dpath, stroke: lcol, 'stroke-width': 2.4, fill: 'none' }, g);
+  }
+  for (let h = 6; h < H - 4; h += 8) {
+    const r1 = PFt(0.115, h), r2 = PFt(0.185, h);
+    el('line', { x1: r1.x, y1: r1.y, x2: r2.x, y2: r2.y, stroke: lcol, 'stroke-width': 2 }, g);
   }
 
   // construction: reveal snaps to real floor lines, dust puffs as each lands
@@ -1432,28 +1531,30 @@ function puffAt(x, y, N) {
   }
 }
 
-function drawFloorIso(g, bi, fi, f, PF, PR, ctx, N) {
+function drawFloorIso(g, bi, fi, f, PFt, PRt, ctx, N) {
   const hb = LOBBY_HZ + fi * FLOOR_HZ, ht = hb + FLOOR_HZ;
   const wins = [];
-  // vertical glass strips across the facade, reference style
+  // vertical glass strips across the facade — they follow the structure's taper
   for (let wi = 0; wi < 4; wi++) {
     const t0 = 0.06 + wi * 0.135, t1 = t0 + 0.085;
     const lit = N && rnd(bi * 131 + fi * 17 + wi * 7) > 0.55;
     wins.push(el('polygon', {
-      points: P([PF(t0, ht - 2.5), PF(t1, ht - 2.5), PF(t1, hb + 2.5), PF(t0, hb + 2.5)]),
+      points: P([PFt(t0, ht - 2.5), PFt(t1, ht - 2.5), PFt(t1, hb + 2.5), PFt(t0, hb + 2.5)]),
       fill: lit ? '#FFD98A' : (N ? '#25314A' : GLASS),
       stroke: lit ? 'none' : GLASS_D, 'stroke-width': 0.8,
     }, g));
   }
-  for (const [si, [t0, t1]] of [[0, [0.18, 0.32]], [1, [0.44, 0.58]]].entries()) {
-    const litR = N && rnd(bi * 131 + fi * 17 + 91 + si * 5) > 0.6;
-    wins.push(el('polygon', {
-      points: P([PR(t0, ht - 3), PR(t1, ht - 3), PR(t1, hb + 3), PR(t0, hb + 3)]),
-      fill: litR ? '#EDC372' : (N ? '#1D2740' : shade(GLASS, 1, 0.72)),
-    }, g));
+  if (ctx.wAt(hb) > 0.92) {
+    for (const [si, [t0, t1]] of [[0, [0.18, 0.32]], [1, [0.44, 0.58]]].entries()) {
+      const litR = N && rnd(bi * 131 + fi * 17 + 91 + si * 5) > 0.6;
+      wins.push(el('polygon', {
+        points: P([PRt(t0, ht - 3), PRt(t1, ht - 3), PRt(t1, hb + 3), PRt(t0, hb + 3)]),
+        fill: litR ? '#EDC372' : (N ? '#1D2740' : shade(GLASS, 1, 0.72)),
+      }, g));
+    }
   }
 
-  const lp = PF(0.69, hb + FLOOR_HZ / 2 - 4);
+  const lp = PFt(0.69, hb + FLOOR_HZ / 2 - 4);
   const label = el('text', {
     class: 'floorlabel' + (N ? ' night' : ''), x: lp.x, y: lp.y,
     'text-anchor': 'middle', transform: `rotate(${ctx.ang.toFixed(1)} ${lp.x} ${lp.y})`,
@@ -1463,13 +1564,14 @@ function drawFloorIso(g, bi, fi, f, PF, PR, ctx, N) {
 
   const glow = el('polygon', {
     class: 'floorglow',
-    points: P([PF(0.02, ht - 1), PF(0.98, ht - 1), PF(0.98, hb + 1), PF(0.02, hb + 1)]),
+    points: P([PFt(0.02, ht - 1), PFt(0.98, ht - 1), PFt(0.98, hb + 1), PFt(0.02, hb + 1)]),
     fill: '#FFD98A', visibility: 'hidden',
   }, g);
 
-  const wf = PF(0.15, 0);
-  const ladderTop = { x: wf.x, y: wf.y - hb - 2 };
-  const pp = PF(0.46, hb);
+  const wf = PFt(0.15, 0);
+  const lt = PFt(0.15, hb);
+  const ladderTop = { x: lt.x, y: lt.y - 2 };
+  const pp = PFt(0.46, hb);
   const perch = { x: pp.x, y: pp.y - 2 };
   return {
     streetIso: ctx.streetIso, vx: ctx.vx, base: ctx.base,
@@ -1692,7 +1794,7 @@ function tick(ts) {
   for (const a of [...agents.values()]) {
     if (a.state === 'moving') {
       const s0 = a.path[a.seg], s1 = a.path[Math.min(a.seg + 1, a.path.length - 1)];
-      const onLadder = Math.abs(s1.x - s0.x) < 0.5 && Math.abs(s1.y - s0.y) > 0.5;
+      const onLadder = Math.abs(s1.y - s0.y) > 4 && Math.abs(s1.x - s0.x) < Math.abs(s1.y - s0.y) * 0.45;
       const cruise = SPEED * (onLadder ? 0.55 : 1) * (a.queue.length > 2 ? HURRY : 1);
       const brake = Math.sqrt(2 * ACCEL * Math.max(0, a.remaining));
       a.vel = Math.min(a.vel + ACCEL * dt, cruise, Math.max(brake, 26));
@@ -1715,7 +1817,7 @@ function tick(ts) {
         arrive(a);
       } else {
         const p0 = a.path[a.seg], p1 = a.path[a.seg + 1];
-        const vertical = Math.abs(p1.x - p0.x) < 0.5;
+        const vertical = Math.abs(p1.y - p0.y) > 4 && Math.abs(p1.x - p0.x) < Math.abs(p1.y - p0.y) * 0.45;
         const rate = (a.vel / SPEED) * a.gait;
         a.animT += dt * rate * (vertical ? 0.7 : 1);
         a.setFrame(a.runCycle[Math.floor(a.animT * RUN_FPS) % a.runCycle.length]);
