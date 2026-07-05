@@ -114,9 +114,9 @@
   @keyframes sway { from { transform: rotate(-1.6deg); } to { transform: rotate(2.2deg); } }
   .roam { animation: roam var(--dur, 60s) ease-in-out infinite alternate; animation-delay: var(--delay, 0s); }
   @keyframes roam { from { transform: translate(0, 0); } to { transform: translate(var(--dx, 0px), var(--dy, 0px)); } }
-  /* the city builds itself, floor by floor from the ground up */
-  .rise { animation: buildup 1s steps(8, end) backwards; }
-  @keyframes buildup { from { clip-path: inset(100% 0 0 0); } to { clip-path: inset(0 0 0 0); } }
+  /* construction dust as each floor lands */
+  .puff { animation: puff 0.55s ease-out forwards; transform-box: fill-box; transform-origin: center; pointer-events: none; }
+  @keyframes puff { from { opacity: 0.6; transform: scale(0.35); } to { opacity: 0; transform: scale(2); } }
   @keyframes fadein { from { opacity: 0; } }
 
   .agent { transition: opacity 0.3s; }
@@ -1258,12 +1258,6 @@ function drawBuildingIso(b, i, gx, gy, N, seq) {
   if (N) roof = shade(roof, 0.75, 0.5);
   const trim = shade(wall, 1.05, N ? 0.78 : 0.72);
   const g = el('g', {}, svg);
-  if (rising) {
-    g.setAttribute('class', 'rise');
-    g.style.animationDelay = `${(0.25 + (seq || 0) * 0.08).toFixed(2)}s`;
-    g.style.animationDuration = `${(0.3 + floors * 0.14).toFixed(2)}s`;      // one beat per floor
-    g.style.animationTimingFunction = `steps(${floors + 2}, end)`;           // pop, pop, pop…
-  }
   el('title', {}, g).textContent = b.full;
 
   const { A, B, C, D } = cornersOf(bx, by, W_ISO, D_ISO);
@@ -1370,6 +1364,45 @@ function drawBuildingIso(b, i, gx, gy, N, seq) {
   el('rect', { x: lf.x + 3, y: lf.y - H + 6, width: 2.4, height: H - 6, fill: lcol }, g);
   for (let ry = lf.y - 6; ry > lf.y - H + 8; ry -= 8) {
     el('rect', { x: lf.x - 5, y: ry, width: 10.4, height: 2, fill: lcol }, g);
+  }
+
+  // construction: reveal snaps to real floor lines, dust puffs as each lands
+  if (rising) {
+    const left = Math.min(A.x, D.x) - 260, right = Math.max(B.x, C.x) + 260;
+    const bottom = C.y + 80, topFinal = C.y - H - 90;
+    const ys = [];
+    for (let k = 0; k <= floors; k++) ys.push(C.y - LOBBY_HZ - k * FLOOR_HZ);
+    ys.push(topFinal);   // roof, parapet and rooftop props land as one final piece
+    const delay = 0.25 + (seq || 0) * 0.08;
+    const step = 0.14;
+    const dur = (step * ys.length).toFixed(2) + 's';
+    const cid = `bld-${i}-${gx}-${gy}`;
+    const cp = el('clipPath', { id: cid }, svg);
+    const cr = el('rect', { x: left, width: right - left, y: bottom, height: 0 }, cp);
+    el('animate', { attributeName: 'y', values: ys.join(';'), dur, begin: `${delay.toFixed(2)}s`, calcMode: 'discrete', fill: 'freeze' }, cr);
+    el('animate', { attributeName: 'height', values: ys.map(y => bottom - y).join(';'), dur, begin: `${delay.toFixed(2)}s`, calcMode: 'discrete', fill: 'freeze' }, cr);
+    g.setAttribute('clip-path', `url(#${cid})`);
+
+    const svgRef = svg;
+    ys.forEach((yEdge, k) => {
+      setTimeout(() => {
+        if (svgRef !== svg) return;   // scene was rebuilt mid-intro
+        puffAt(D.x + 3, yEdge + 5, N);
+        puffAt(B.x - 3, yEdge + 5, N);
+        if (k === ys.length - 1) puffAt((D.x + B.x) / 2, C.y - H + 4, N);   // roof lands
+      }, (delay + k * step) * 1000 + 40);
+    });
+  }
+}
+
+function puffAt(x, y, N) {
+  for (let j = 0; j < 3; j++) {
+    const c = el('circle', {
+      cx: x + (j - 1) * 8, cy: y + (j % 2) * 3 - 1, r: 4.5 + j * 2,
+      fill: N ? '#55607A' : '#D8D2C4', class: 'puff',
+      style: `animation-delay: ${j * 0.04}s`,
+    }, svg);
+    setTimeout(() => c.remove(), 800);
   }
 }
 
