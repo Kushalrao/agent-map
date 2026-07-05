@@ -70,6 +70,12 @@
     background: radial-gradient(ellipse 70% 62% at 50% 84%, transparent 56%, var(--bg) 96%);
   }
   #rideView { position: fixed; inset: 0; z-index: 4; display: none; }
+  #grain {
+    position: fixed; inset: 0; z-index: 7; pointer-events: none; display: none; opacity: 0.14;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+  html.gospel #grain { display: block; }
   #lockScreen {
     position: fixed; inset: 0; z-index: 60; display: none;
     align-items: center; justify-content: center; flex-direction: column; gap: 14px;
@@ -164,8 +170,8 @@
   .agent .bubble-text { font-size: 10.5px; font-family: ui-monospace, Menlo, monospace; fill: var(--bubble-text); }
   .agent .bubble-verb { font-weight: 700; }
 
-  #themeBtn {
-    position: fixed; right: 14px; top: 14px; z-index: 20;
+  #themeBtn, #sceneBtn {
+    position: fixed; right: 14px; z-index: 20;
     width: 38px; height: 38px; border-radius: 50%;
     background: var(--panel); backdrop-filter: blur(4px);
     border: 1px solid var(--panel-border); box-shadow: 0 2px 8px var(--shadow);
@@ -173,7 +179,9 @@
     font-size: 16px; line-height: 1; color: var(--fg);
     transition: transform 0.12s, box-shadow 0.12s;
   }
-  #themeBtn:hover { transform: scale(1.12); box-shadow: 0 3px 12px var(--shadow-hover); }
+  #themeBtn { top: 14px; }
+  #sceneBtn { top: 60px; }
+  #themeBtn:hover, #sceneBtn:hover { transform: scale(1.12); box-shadow: 0 3px 12px var(--shadow-hover); }
 </style>
 </head>
 <body>
@@ -183,6 +191,8 @@
     <div id="pickMenu"></div>
   </div>
   <button id="themeBtn" title="toggle day / night"></button>
+  <button id="sceneBtn" title="switch scene theme">🌀</button>
+  <div id="grain"></div>
   <canvas id="rideView"></canvas>
   <div id="rideVeil"></div>
   <div id="followHud"></div>
@@ -1001,6 +1011,26 @@ const S_STRIPS = Array.from({ length: 4 }, (_, k) => [0.08 + k * 0.24, 0.23 + k 
 const F_PUNCH = [[0.08, 0.26], [0.34, 0.52], [0.6, 0.78]];
 const SKINS = ['#F8C89A', '#C68642', '#8D5524', '#FFDBAC'];
 
+/* ---------- scene themes: 'city' (reference candy city) | 'gospel' (psychedelic) ---------- */
+let SCENE = localStorage.getItem('gitcity-scene') || 'city';
+let GSPL = false;   // set per-build; true while rendering the gospel theme
+/* gospel palette: vivid pastel base hues (used for shade-derived details) */
+const WALLS_G = ['#F58FC2', '#8FE0C8', '#B79CF0', '#F5D97A', '#7FCFE8', '#F5A38F', '#C8F58F', '#E88FD4', '#9CC0F5', '#F5B0D9'];
+const GLASS_G = '#C8F5EC', GLASS_GD = '#7FD9C8';
+/* iridescent vertical gradients — each building runs top→bottom through pastel hues */
+const GOSPEL_GRADS = [
+  ['#F5E888', '#8FE0A8', '#7FCFE8', '#B79CF0'],
+  ['#F5A8D4', '#C89CF0', '#8FB0E8'],
+  ['#F5C08F', '#F58FC2', '#C86FD4'],
+  ['#8FE0C8', '#7FCFE8', '#9C9CF0'],
+  ['#F5E088', '#F5A38F', '#E88FC2'],
+  ['#B79CF0', '#8F9CF0', '#7FCFE8'],
+  ['#8FE0A8', '#C8E888', '#F5D97A'],
+  ['#F58FA8', '#E88FD4', '#B79CF0'],
+];
+/* mid hue of a gradient — the base color for trim/mullion/banner derivations */
+const gospelMid = gi => GOSPEL_GRADS[gi][Math.floor(GOSPEL_GRADS[gi].length / 2)];
+
 /* draw an isometric box: roof + the two camera-facing walls (azimuth-aware) */
 function isoBox(g, x0, y0, wx, wy, hb, ht, cTop, cLeft, cRight, proj) {
   const { A, B, C, D } = cornersOf(x0, y0, wx, wy, proj);
@@ -1059,13 +1089,34 @@ function buildMap(root) {
   svg = el('svg', { width, height, viewBox: `0 0 ${width} ${height}` });
   mapwrap.appendChild(svg);
 
+  GSPL = SCENE === 'gospel';
+
   // SVG-native hover glow (CSS drop-shadow on SVG groups is a no-op in Safari)
   const defs = el('defs', {}, svg);
   const flt = el('filter', { id: 'bglow', x: '-40%', y: '-40%', width: '180%', height: '180%' }, defs);
   // brighten the building itself, then wrap it in the warm halo
   const cm = el('feComponentTransfer', { result: 'lit' }, flt);
   for (const ch of ['feFuncR', 'feFuncG', 'feFuncB']) el(ch, { type: 'linear', slope: 1.18, intercept: 0.03 }, cm);
-  el('feDropShadow', { in: 'lit', dx: 0, dy: 0, stdDeviation: 7, 'flood-color': '#FFD66E', 'flood-opacity': 0.95 }, flt);
+  el('feDropShadow', { in: 'lit', dx: 0, dy: 0, stdDeviation: 7, 'flood-color': GSPL ? '#F5A8F0' : '#FFD66E', 'flood-opacity': 0.95 }, flt);
+
+  if (GSPL) {
+    // iridescent building gradients (front/side faces) + brighter roof variants
+    GOSPEL_GRADS.forEach((stops, gi) => {
+      const mk = (id, arr) => {
+        const gr = el('linearGradient', { id, x1: 0, y1: 0, x2: 0.12, y2: 1 }, defs);
+        arr.forEach((c, k) => el('stop', { offset: `${(k / (arr.length - 1) * 100).toFixed(0)}%`, 'stop-color': c }, gr));
+      };
+      mk(`gg${gi}`, stops);
+      mk(`gr${gi}`, stops.map(c => shade(c, 1, 1.12)));
+    });
+    // neon window glow
+    const wg = el('filter', { id: 'ggwin', x: '-60%', y: '-60%', width: '220%', height: '220%' }, defs);
+    el('feDropShadow', { dx: 0, dy: 0, stdDeviation: 3.5, 'flood-color': '#FFF4C8', 'flood-opacity': 0.9 }, wg);
+    // film grain overlay for the whole scene
+    const gf = el('filter', { id: 'ggrain' }, defs);
+    el('feTurbulence', { type: 'fractalNoise', baseFrequency: 0.9, numOctaves: 2, stitchTiles: 'stitch', result: 'n' }, gf);
+    el('feColorMatrix', { in: 'n', type: 'matrix', values: '0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.5 0' }, gf);
+  }
 
   riseKeys = INTRO ? 'all' : new Set(dirs.filter(d => !knownDirs.has(d.key)).map(d => d.key));
   knownDirs = new Set(dirs.map(d => d.key));
@@ -1162,13 +1213,23 @@ function buildMap(root) {
 
 function drawGround(w, h, spanX, spanY, cols, rows, N) {
   // grass world, paved plaza, street grid
-  el('rect', { x: 0, y: 0, width: w, height: h, fill: N ? '#08090C' : '#FAFBEE' }, svg);
+  if (GSPL) {
+    const sg = el('linearGradient', { id: 'gsky', x1: 0, y1: 0, x2: 0.4, y2: 1 }, svg);
+    const stops = N
+      ? [['0%', '#1A1038'], ['45%', '#4A1E66'], ['100%', '#8F2E7A']]
+      : [['0%', '#8FD0F0'], ['40%', '#C8A8E8'], ['75%', '#F5A8D4'], ['100%', '#F5C8A8']];
+    for (const [o, c] of stops) el('stop', { offset: o, 'stop-color': c }, sg);
+    el('rect', { x: 0, y: 0, width: w, height: h, fill: 'url(#gsky)' }, svg);
+  } else {
+    el('rect', { x: 0, y: 0, width: w, height: h, fill: N ? '#08090C' : '#FAFBEE' }, svg);
+  }
   const gx0 = -S_ISO, gx1 = spanX, gy0 = -S_ISO, gy1 = spanY;
-  el('polygon', { points: P([isoS(gx0 - 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy1 + 0.6), isoS(gx0 - 0.6, gy1 + 0.6)]), fill: N ? '#93A3C7' : '#C6D3E4' }, svg);
+  const plaza = GSPL ? (N ? '#5A3A7A' : '#E8B0E0') : (N ? '#93A3C7' : '#C6D3E4');
+  el('polygon', { points: P([isoS(gx0 - 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy1 + 0.6), isoS(gx0 - 0.6, gy1 + 0.6)]), fill: plaza }, svg);
 
   const nf = NEARF || (() => true);
-  const asph = N ? '#6F82A8' : '#8CA3C4';
-  const dash = N ? '#F5F8FC' : '#F5F8FC';
+  const asph = GSPL ? (N ? '#C85FA8' : '#F58FC2') : (N ? '#6F82A8' : '#8CA3C4');   // gospel: pink flowing streets
+  const dash = GSPL ? '#FFF0FA' : '#F5F8FC';
   for (let gy = 0; gy <= rows; gy++) {
     const y0 = gy * PITCH_Y - S_ISO;
     el('polygon', { points: P([isoS(gx0, y0), isoS(gx1, y0), isoS(gx1, y0 + S_ISO), isoS(gx0, y0 + S_ISO)]), fill: asph }, svg);
@@ -1510,19 +1571,22 @@ function drawPedestrian(ix, iy, axis, seed, N) {
 function drawTreeAt(p, s, N, kind) {
   const g = el('g', { transform: `translate(${p.x} ${p.y}) scale(${s})` }, svg);
   el('ellipse', { cx: 4, cy: 3, rx: 26, ry: 10, fill: '#2B3345', opacity: 0.15 }, g);
-  const leaf = N ? '#2F6B45' : '#63B04E', leaf2 = N ? '#4E9256' : '#8FCB6B', leaf3 = N ? '#255C3B' : '#3E8A52';
+  const leaf = GSPL ? '#5FD9A8' : (N ? '#2F6B45' : '#63B04E'),
+    leaf2 = GSPL ? '#8FF0C8' : (N ? '#4E9256' : '#8FCB6B'),
+    leaf3 = GSPL ? '#3EB88F' : (N ? '#255C3B' : '#3E8A52');
+  const trunk = GSPL ? '#C88FD9' : (N ? '#8578B8' : '#8B6142');
   const canopy = el('g', { class: 'sway', style: `animation-delay:-${(p.x % 7).toFixed(1)}s` }, g);
   if (kind === 'palm') {
-    el('path', { d: 'M -2 0 C -4 -22 2 -40 6 -56', stroke: N ? '#8578B8' : '#8B6142', 'stroke-width': 6, fill: 'none', 'stroke-linecap': 'round' }, g);
+    el('path', { d: 'M -2 0 C -4 -22 2 -40 6 -56', stroke: trunk, 'stroke-width': 6, fill: 'none', 'stroke-linecap': 'round' }, g);
     for (const [rx, ry, ang] of [[22, 8, -30], [22, 8, 25], [18, 7, -70], [18, 7, 70], [20, 7, 0]]) {
       el('ellipse', { cx: 6, cy: -58, rx, ry, fill: leaf3, transform: `rotate(${ang} 6 -58)` }, canopy);
     }
   } else if (kind === 'tall') {
-    el('rect', { x: -3, y: -44, width: 6, height: 44, rx: 3, fill: N ? '#8578B8' : '#8B6142' }, g);
+    el('rect', { x: -3, y: -44, width: 6, height: 44, rx: 3, fill: trunk }, g);
     el('ellipse', { cx: 0, cy: -62, rx: 15, ry: 24, fill: leaf3 }, canopy);
     el('ellipse', { cx: 0, cy: -70, rx: 10, ry: 15, fill: leaf }, canopy);
   } else {
-    el('rect', { x: -4, y: -34, width: 8, height: 34, rx: 3, fill: N ? '#8578B8' : '#8B6142' }, g);
+    el('rect', { x: -4, y: -34, width: 8, height: 34, rx: 3, fill: trunk }, g);
     el('circle', { cx: 0, cy: -50, r: 22, fill: leaf }, canopy);
     el('circle', { cx: -15, cy: -38, r: 14, fill: leaf3 }, canopy);
     el('circle', { cx: 15, cy: -38, r: 14, fill: leaf }, canopy);
@@ -1554,6 +1618,36 @@ function drawParkLot(gx, gy, N) {
 }
 
 function drawWeather(w, h, spanX, spanY, N) {
+  if (GSPL) {
+    // a flowing rainbow ribbon arcing across the dream sky, plus sparkle stars
+    const skyH = Math.max(0, OY - 60);
+    const rg = el('linearGradient', { id: 'gribbon', x1: 0, y1: 0, x2: 1, y2: 0 }, svg);
+    for (const [o, c] of [['0%', '#F5A8D4'], ['30%', '#F5D97A'], ['55%', '#8FE0A8'], ['80%', '#7FCFE8'], ['100%', '#B79CF0']]) {
+      el('stop', { offset: o, 'stop-color': c }, rg);
+    }
+    const y0 = skyH * 0.42;
+    el('path', {
+      d: `M ${-40} ${y0 + 70} C ${w * 0.3} ${y0 - 120}, ${w * 0.7} ${y0 + 160}, ${w + 40} ${y0 - 30}`,
+      stroke: 'url(#gribbon)', 'stroke-width': 34, fill: 'none', 'stroke-linecap': 'round', opacity: 0.85,
+    }, svg);
+    el('path', {
+      d: `M ${-40} ${y0 + 70} C ${w * 0.3} ${y0 - 120}, ${w * 0.7} ${y0 + 160}, ${w + 40} ${y0 - 30}`,
+      stroke: '#FFFFFF', 'stroke-width': 6, fill: 'none', 'stroke-linecap': 'round', opacity: 0.4,
+    }, svg);
+    for (let i = 0; i < 90; i++) {
+      const sx = rnd(i * 3) * w, sy = rnd(i * 7 + 1) * skyH;
+      const r = rnd(i + 5) * 1.6 + 0.5;
+      el('circle', { cx: sx, cy: sy, r, fill: '#FFF6E8', opacity: (0.4 + rnd(i) * 0.5).toFixed(2) }, svg);
+      if (rnd(i + 20) > 0.85) {   // occasional four-point sparkle
+        el('path', { d: `M ${sx} ${sy - 5} L ${sx + 1.2} ${sy - 1.2} L ${sx + 5} ${sy} L ${sx + 1.2} ${sy + 1.2} L ${sx} ${sy + 5} L ${sx - 1.2} ${sy + 1.2} L ${sx - 5} ${sy} L ${sx - 1.2} ${sy - 1.2} Z`, fill: '#FFF6E8', opacity: 0.8 }, svg);
+      }
+    }
+    // a floaty eyeball-moon / sun orb
+    const ox = w * 0.8, oy = skyH * 0.24;
+    el('circle', { cx: ox, cy: oy, r: 30, fill: N ? '#F5D9F0' : '#FFE28A' }, svg);
+    el('circle', { cx: ox, cy: oy, r: 22, fill: N ? '#F5B0E0' : '#FFF0B8' }, svg);
+    return;
+  }
   if (N) return;   // reference night: pure black void, no moon or stars
   // drifting clouds with shadows on the city below
   for (let i = 0; i < 4; i++) {
@@ -1641,13 +1735,18 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
     return;
   }
 
-  // night uses the reference palette: dusty rich walls, fully lit against the black sky
-  let wall = (N ? WALLS_N : WALLS)[i % WALLS.length];
-  if (style === 'eiffel') wall = '#A87C58';   // riveted iron
+  // night uses the reference palette; gospel uses vivid iridescent hues
+  const gi = i % GOSPEL_GRADS.length;
+  let wall = GSPL ? gospelMid(gi) : (N ? WALLS_N : WALLS)[i % WALLS.length];
+  if (style === 'eiffel') wall = GSPL ? '#C8A8F0' : '#A87C58';   // riveted iron / crystal
   const faceR = shade(wall, 1, 0.86);   // reference two-tone: side face a notch deeper
   let roof = N ? shade(wall, 1, 1.06) : shade(wall, 1.12, 0.62);   // ref night roofs match the walls
-  if (!N && (style === 'pagoda' || style === 'dome' || style === 'clock')) roof = ROOFS[Math.floor(rnd(i * 7 + 2) * ROOFS.length)];
-  const trim = shade(wall, 1.05, 0.72);
+  if (!GSPL && !N && (style === 'pagoda' || style === 'dome' || style === 'clock')) roof = ROOFS[Math.floor(rnd(i * 7 + 2) * ROOFS.length)];
+  const trim = shade(wall, 1.05, GSPL ? 1.1 : 0.72);
+  // face fills: flat hex in city, iridescent gradients in gospel
+  const wallFill = GSPL ? `url(#gg${gi})` : wall;
+  const faceRFill = GSPL ? `url(#gg${gi})` : faceR;
+  const roofFill = GSPL ? `url(#gr${gi})` : roof;
   const g = el('g', { class: 'bldg' }, svg);
   el('title', {}, g).textContent = b.full;
 
@@ -1670,11 +1769,11 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
 
   // opaque backing silhouette: hairline antialiasing seams between the many
   // facade polygons show THIS instead of whatever is behind the building
-  el('polygon', { points: P([topA, topB, B, C, D, topD]), fill: wall }, g);
+  el('polygon', { points: P([topA, topB, B, C, D, topD]), fill: wallFill }, g);
 
   if (style === 'empire') {
     for (const [h0, h1, f] of [[0, H * 0.52, 1], [H * 0.52, H * 0.78, 0.78], [H * 0.78, H, 0.6]]) {
-      isoBox(g, bx, by + D_ISO * (1 - f), W_ISO * f, D_ISO * f, h0, h1, roof, wall, faceR);
+      isoBox(g, bx, by + D_ISO * (1 - f), W_ISO * f, D_ISO * f, h0, h1, roofFill, wallFill, faceRFill);
     }
     const sp = FP(bx + W_ISO * 0.3, by + D_ISO * 0.5, H);
     el('rect', { x: sp.x - 3, y: sp.y - 24, width: 6, height: 24, fill: trim }, g);
@@ -1682,9 +1781,9 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
     el('circle', { cx: sp.x, cy: sp.y - 45, r: 2.5, fill: N ? '#FF6B6B' : '#E8ECF2' }, g);
     capH = 50;
   } else if (style === 'eiffel' || style === 'pagoda') {
-    el('polygon', { points: P([D, C, topC, topD]), fill: wall }, g);
-    el('polygon', { points: P([C, B, topB, topC]), fill: faceR }, g);
-    el('polygon', { points: P([topA, topB, topC, topD]), fill: roof }, g);
+    el('polygon', { points: P([D, C, topC, topD]), fill: wallFill }, g);
+    el('polygon', { points: P([C, B, topB, topC]), fill: faceRFill }, g);
+    el('polygon', { points: P([topA, topB, topC, topD]), fill: roofFill }, g);
     if (style === 'eiffel') {
       for (const [t0, t1] of [[0.06, 0.94], [0.94, 0.06]]) {   // lattice braces
         const p0 = PFt(t0, 2), p1 = PFt(t1, H * 0.55);
@@ -1704,7 +1803,7 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
         const f2 = Math.min(1.1, wAt(eh) + 0.17);
         const eD = shrPt(bx, by + D_ISO, f2, eh), eC = shrPt(bx + W_ISO, by + D_ISO, f2, eh);
         const eB = shrPt(bx + W_ISO, by, f2, eh), eA = shrPt(bx, by, f2, eh);
-        el('polygon', { points: P([eA, eB, eC, eD]), fill: roof }, g);
+        el('polygon', { points: P([eA, eB, eC, eD]), fill: roofFill }, g);
         el('polygon', { points: P([eD, eC, { x: eC.x, y: eC.y + 3.5 }, { x: eD.x, y: eD.y + 3.5 }]), fill: shade(roof, 1, 0.75) }, g);
         el('polygon', { points: P([eC, eB, { x: eB.x, y: eB.y + 3.5 }, { x: eC.x, y: eC.y + 3.5 }]), fill: shade(roof, 1, 0.6) }, g);
       }
@@ -1714,7 +1813,7 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
       capH = 22;
     }
   } else {
-    isoBox(g, bx, by, W_ISO, D_ISO, 0, H, roof, wall, faceR);
+    isoBox(g, bx, by, W_ISO, D_ISO, 0, H, roofFill, wallFill, faceRFill);
     el('polygon', {
       points: P([{ x: A.x, y: A.y - H }, { x: B.x, y: B.y - H }, { x: C.x, y: C.y - H }, { x: D.x, y: D.y - H }]),
       fill: 'none', stroke: shade(roof, 1, N ? 0.75 : 0.85), 'stroke-width': 2.5,
@@ -1775,7 +1874,7 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
   }
 
   // ground floor: full-glass storefront with mullions + dark entrance
-  el('polygon', { points: P([PFt(0.04, 3), PFt(0.96, 3), PFt(0.96, LOBBY_HZ - 5), PFt(0.04, LOBBY_HZ - 5)]), fill: N ? GLASS_N : GLASS }, g);
+  el('polygon', { points: P([PFt(0.04, 3), PFt(0.96, 3), PFt(0.96, LOBBY_HZ - 5), PFt(0.04, LOBBY_HZ - 5)]), fill: GSPL ? GLASS_G : (N ? GLASS_N : GLASS) }, g);
   for (const tm of [0.27, 0.5, 0.73]) {
     el('polygon', { points: P([PFt(tm, 3), PFt(tm + 0.012, 3), PFt(tm + 0.012, LOBBY_HZ - 5), PFt(tm, LOBBY_HZ - 5)]), fill: shade(wall, 1, 0.92) }, g);
   }
@@ -1899,7 +1998,8 @@ function puffAt(x, y, N) {
 function drawFloorIso(g, bi, fi, f, PFt, PRt, ctx, N) {
   const hb = LOBBY_HZ + fi * FLOOR_HZ, ht = hb + FLOOR_HZ;
   const wins = [];
-  const GL = N ? GLASS_N : GLASS;
+  const GL = GSPL ? GLASS_G : (N ? GLASS_N : GLASS);
+  const GLhi = GSPL ? '#EAFFF8' : (N ? '#6FC3D6' : '#A9E0EE');
   if (ctx.tower) {
     // curtain wall: continuous glass columns floor-to-ceiling, thin mullions between
     for (const [t0, t1] of T_STRIPS) {
@@ -1909,7 +2009,7 @@ function drawFloorIso(g, bi, fi, f, PFt, PRt, ctx, N) {
       }, g));
       el('polygon', {
         points: P([PFt(t0, ht), PFt(t0 + 0.025, ht), PFt(t0 + 0.025, hb), PFt(t0, hb)]),
-        fill: N ? '#6FC3D6' : '#A9E0EE',
+        fill: GLhi,
       }, g);
     }
     // transom: faint floor line across the glass
@@ -2773,6 +2873,22 @@ themeBtn.onclick = () => {
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (m) => {
   if (!localStorage.getItem('agentview-theme')) setDark(m.matches);
 });
+
+/* ---------- scene theme switcher: candy city ⇄ psychedelic ---------- */
+const SCENES = ['city', 'gospel'];
+const sceneBtn = document.getElementById('sceneBtn');
+function paintSceneBtn() {
+  sceneBtn.textContent = SCENE === 'gospel' ? '🏙' : '🌀';
+  sceneBtn.title = SCENE === 'gospel' ? 'psychedelic — switch to city' : 'city — switch to psychedelic';
+  document.documentElement.classList.toggle('gospel', SCENE === 'gospel');
+}
+paintSceneBtn();
+sceneBtn.onclick = () => {
+  SCENE = SCENES[(SCENES.indexOf(SCENE) + 1) % SCENES.length];
+  localStorage.setItem('gitcity-scene', SCENE);
+  paintSceneBtn();
+  if (svg) refreshMap();
+};
 
 document.getElementById('lockGo').onclick = async () => {
   const key = document.getElementById('lockKey').value;
