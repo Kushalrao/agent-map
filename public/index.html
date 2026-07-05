@@ -1757,12 +1757,16 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
   // square "brand" plate with the folder's initial
   if (H > 70 && style !== 'eiffel') {
     const h1 = H - 12, h0 = H - 36;
-    el('polygon', { points: P([PFt(0.68, h1), PFt(0.96, h1), PFt(0.96, h0), PFt(0.68, h0)]), fill: N ? '#E8ECF2' : '#FFFFFF', stroke: shade(wall, 1, 0.5), 'stroke-width': 1.5 }, g);
+    el('polygon', {
+      points: P([PFt(0.68, h1), PFt(0.96, h1), PFt(0.96, h0), PFt(0.68, h0)]),
+      fill: N ? '#141C2E' : '#FFFFFF',
+      stroke: N ? shade(wall, 1, 1.2) : shade(wall, 1, 0.5), 'stroke-width': 1.5,
+    }, g);
     const lp2 = PFt(0.82, (h0 + h1) / 2 - 5);
     const it = el('text', {
       x: lp2.x, y: lp2.y, 'text-anchor': 'middle',
       transform: `rotate(${ang.toFixed(1)} ${lp2.x} ${lp2.y})`,
-      style: `font: 800 13px ui-monospace, Menlo, monospace; fill: ${shade(wall, 1, 0.45)}`,
+      style: `font: 800 13px ui-monospace, Menlo, monospace; fill: ${N ? shade(wall, 1, 1.35) : shade(wall, 1, 0.45)}`,
     }, g);
     it.textContent = b.name.slice(0, 2).toUpperCase();
   }
@@ -1781,13 +1785,13 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
   void capH;
   el('polygon', {
     points: P([PFt(0.08, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ + 10), PFt(0.08, LOBBY_HZ + 10)]),
-    fill: '#FFFFFF', stroke: shade(wall, 1, 0.8), 'stroke-width': 1,
+    fill: N ? '#141C2E' : '#FFFFFF', stroke: N ? shade(wall, 1, 1.15) : shade(wall, 1, 0.8), 'stroke-width': 1,
   }, g);
   const sp2 = PFt(0.5, LOBBY_HZ + 0.5);
   const nameT = el('text', {
     x: sp2.x, y: sp2.y, 'text-anchor': 'middle',
     transform: `rotate(${ang.toFixed(1)} ${sp2.x} ${sp2.y})`,
-    style: 'font: 700 8.5px ui-monospace, Menlo, monospace; fill: #2B2F3A',
+    style: `font: 700 8.5px ui-monospace, Menlo, monospace; fill: ${N ? '#F2EFD9' : '#2B2F3A'}`,
   }, g);
   nameT.textContent = b.name.length > 14 ? b.name.slice(0, 13) + '…' : b.name;
   el('title', {}, nameT).textContent = b.full;
