@@ -912,6 +912,7 @@ let agents = new Map();
 let agentLayer = null;
 let OX = 0, OY = 0;        // iso origin on the canvas
 let AZ = parseFloat(localStorage.getItem('agentview-az') || String(Math.PI / 4));   // camera azimuth — drag to orbit
+let vAZ = AZ;   // visual azimuth: moves smoothly every frame; AZ re-bakes geometry in coarse steps
 const KX = K * Math.SQRT2, KY = K2 * Math.SQRT2;
 const isoS = (ix, iy) => ({
   x: OX + (ix * Math.cos(AZ) - iy * Math.sin(AZ)) * KX,
@@ -1056,6 +1057,8 @@ function buildMap(root) {
         const trg = a.iso || SPAWN.iso;
         a.path = dedupe([{ x: a.x, y: a.y }, ...streetRoute(curIso, trg, trg.x)]);
       }
+      // drop leading micro-stubs so the chase-cam never reads a phantom heading
+      while (a.path.length > 2 && Math.hypot(a.path[1].x - a.path[0].x, a.path[1].y - a.path[0].y) < 9) a.path.splice(1, 1);
       a.seg = 0; a.segT = 0;
       a.remaining = pathLength(a.path);
       a.aloft = false; a.wayDown = null;
@@ -1872,7 +1875,7 @@ function tick(ts) {
       else if (a.isKid && performance.now() - a.lastActive > KID_LINGER) startReturn(a);
     }
   }
-  updateCamera();
+  updateCamera(dt);
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
@@ -1899,18 +1902,24 @@ function followAgent(id) {
   hud.textContent = `⌖ riding with ${id} — click ground to hop off here, Esc to fly back out`;
   hud.style.display = 'block';
 }
+function bakeAZ() {
+  if (Math.abs(vAZ - AZ) > 0.004) { AZ = vAZ; applyRotation(); }
+}
 function dismount() {   // hop off but STAY down in the city
   followId = null;
   followHudEl().style.display = 'none';
   cam.freeZoom = cam.z > 1.05;
+  bakeAZ();
 }
 function exitToOverview() {
   followId = null;
   cam.freeZoom = false;
   followHudEl().style.display = 'none';
+  bakeAZ();
 }
-function updateCamera() {
+function updateCamera(dt) {
   if (!cam.active) return;
+  const step0 = dt || 0.016;
   const vw = mapwrap.clientWidth, vh = mapwrap.clientHeight;
   cam.ay += ((followId ? 0.74 : 0.62) - cam.ay) * 0.05;   // chase-cam sits behind/below the agent
   if (followId) {
@@ -1920,23 +1929,26 @@ function updateCamera() {
       cam.x += (a.x - cam.x) * 0.10;
       cam.y += ((a.y - 30) - cam.y) * 0.10;
       cam.z += (followZ - cam.z) * 0.07;
-      // steer the world: rotate the city so the agent runs away from the camera,
-      // and swing around behind them when they turn a corner
-      if (a.state === 'moving' && a.path[a.seg + 1] && !rotBusy) {
+      // steer smoothly in behind the agent's heading; ignore ladders and micro-segments
+      if (a.state === 'moving' && a.path[a.seg + 1]) {
         const p0 = a.path[a.seg], p1 = a.path[a.seg + 1];
         const dsx = p1.x - p0.x, dsy = p1.y - p0.y;
-        if (Math.abs(dsx) > Math.abs(dsy) * 0.45) {   // street legs steer; ladder climbs don't
+        if (Math.hypot(dsx, dsy) > 24 && Math.abs(dsx) > Math.abs(dsy) * 0.45) {
           const u = dsx / KX, v = dsy / KY;
           const dix = u * Math.cos(AZ) + v * Math.sin(AZ);
           const diy = -u * Math.sin(AZ) + v * Math.cos(AZ);
           const tgt = Math.atan2(dix, diy) + Math.PI;   // heading maps to screen-up
-          const diff = ((tgt - AZ + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
-          if (Math.abs(diff) > 0.012) {
-            AZ += diff * 0.09;
-            applyRotation();
+          const diff = ((tgt - vAZ + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+          if (Math.abs(diff) > 0.01) {
+            let turn = diff * Math.min(1, 3.5 * step0);
+            const maxTurn = 2.2 * step0;
+            if (Math.abs(turn) > maxTurn) turn = maxTurn * Math.sign(turn);
+            vAZ += turn;
           }
         }
       }
+      // re-bake geometry only in coarse steps; the residual renders as a matrix below
+      if (!rotBusy && Math.abs(vAZ - AZ) > 0.1) { AZ = vAZ; applyRotation(); }
     }
   } else if (!cam.freeZoom) {
     cam.z += (1 - cam.z) * 0.14;
@@ -1949,8 +1961,14 @@ function updateCamera() {
     }
   }
   if (svg) {
+    // exact screen-space equivalent of the un-baked azimuth residual: buttery turns, no snap on bake
+    const dRes = vAZ - AZ;
+    const cosd = Math.cos(dRes), sind = Math.sin(dRes);
     svg.style.transformOrigin = '0 0';
-    svg.style.transform = `translate(${(vw / 2 - cam.x * cam.z).toFixed(1)}px, ${(vh * cam.ay - cam.y * cam.z).toFixed(1)}px) scale(${cam.z.toFixed(3)})`;
+    svg.style.transform =
+      `translate(${(vw / 2).toFixed(1)}px, ${(vh * cam.ay).toFixed(1)}px) ` +
+      `matrix(${cosd.toFixed(5)}, ${((KY / KX) * sind).toFixed(5)}, ${(-(KX / KY) * sind).toFixed(5)}, ${cosd.toFixed(5)}, 0, 0) ` +
+      `scale(${cam.z.toFixed(3)}) translate(${(-cam.x).toFixed(1)}px, ${(-cam.y).toFixed(1)}px)`;
   }
 }
 /* pinch / ctrl+scroll zooms toward the cursor — dive right down to street level */
@@ -2086,7 +2104,7 @@ window.addEventListener('pointermove', (e) => {
   }
   mapwrap.scrollTop = dragPan.st - (e.clientY - dragPan.y);
   const nextAz = dragPan.az - (e.clientX - dragPan.x) * 0.0038;
-  if (Math.abs(nextAz - AZ) > 0.02) { AZ = nextAz; applyRotation(); }
+  if (Math.abs(nextAz - AZ) > 0.02) { AZ = nextAz; vAZ = AZ; applyRotation(); }
 });
 function endDrag() {
   if (!dragPan) return;
