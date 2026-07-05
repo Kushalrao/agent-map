@@ -56,7 +56,15 @@
   }
   #mapwrap { width: 100%; height: 100%; overflow: auto; background: var(--bg); cursor: grab; user-select: none; -webkit-user-select: none; }
   #mapwrap.dragging { cursor: grabbing; }
-  svg { display: block; }
+  #mapwrap.following { overflow: hidden; }
+  svg { display: block; will-change: transform; }
+  #followHud {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 25;
+    display: none; background: var(--panel); backdrop-filter: blur(4px);
+    border: 1px solid var(--panel-border); border-radius: 20px; padding: 6px 16px;
+    font: 11px ui-monospace, Menlo, monospace; color: var(--fg);
+    box-shadow: 0 2px 8px var(--shadow); pointer-events: none;
+  }
 
   #picker {
     position: fixed; left: 14px; top: 14px; z-index: 20;
@@ -145,6 +153,7 @@
     <div id="pickMenu"></div>
   </div>
   <button id="themeBtn" title="toggle day / night"></button>
+  <div id="followHud"></div>
   <div id="hud"><span id="status"></span><span id="watchdir">connecting…</span></div>
 
 <script>
@@ -1521,6 +1530,8 @@ function makeAgent(id) {
   const scale = isKid ? KID_SCALE : 1;
 
   const g = el('g', { class: 'agent' }, agentLayer);
+  g.style.cursor = 'pointer';
+  g.addEventListener('pointerdown', (e) => { e.stopPropagation(); followAgent(id); });
   // ground marker so the agent stays findable behind buildings
   el('ellipse', {
     cx: 0, cy: 3, rx: isKid ? 8 : 12, ry: isKid ? 3.2 : 4.6,
@@ -1716,12 +1727,65 @@ function tick(ts) {
       else if (a.isKid && performance.now() - a.lastActive > KID_LINGER) startReturn(a);
     }
   }
+  updateCamera();
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
 
+/* ---------- follow-cam: ride along with an agent, inside the city ---------- */
+let followId = null;
+const cam = { x: 0, y: 0, z: 1, active: false };
+function followAgent(id) {
+  const vw = mapwrap.clientWidth, vh = mapwrap.clientHeight;
+  if (!cam.active) {
+    cam.x = mapwrap.scrollLeft + vw / 2;
+    cam.y = mapwrap.scrollTop + vh * 0.62;
+    cam.z = 1;
+  }
+  followId = id;
+  cam.active = true;
+  mapwrap.classList.add('following');
+  mapwrap.scrollTo(0, 0);
+  const hud = document.getElementById('followHud');
+  hud.textContent = `⌖ riding with ${id} — click anywhere or press Esc to exit`;
+  hud.style.display = 'block';
+}
+function exitFollow() {
+  followId = null;
+  document.getElementById('followHud').style.display = 'none';
+}
+function updateCamera() {
+  if (!cam.active) return;
+  const vw = mapwrap.clientWidth, vh = mapwrap.clientHeight;
+  if (followId) {
+    const a = agents.get(followId);
+    if (!a) exitFollow();
+    else {
+      cam.x += (a.x - cam.x) * 0.10;
+      cam.y += ((a.y - 30) - cam.y) * 0.10;
+      cam.z += (2.4 - cam.z) * 0.07;
+    }
+  }
+  if (!followId) {
+    cam.z += (1 - cam.z) * 0.14;
+    if (cam.z < 1.02) {
+      cam.active = false;
+      if (svg) svg.style.transform = '';
+      mapwrap.classList.remove('following');
+      mapwrap.scrollTo({ left: cam.x - vw / 2, top: cam.y - vh * 0.62 });
+      return;
+    }
+  }
+  if (svg) {
+    svg.style.transformOrigin = '0 0';
+    svg.style.transform = `translate(${(vw / 2 - cam.x * cam.z).toFixed(1)}px, ${(vh * 0.62 - cam.y * cam.z).toFixed(1)}px) scale(${cam.z.toFixed(3)})`;
+  }
+}
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape') exitFollow(); });
+
 let lastUserPan = 0;
 function ensureVisible(x, y) {
+  if (cam.active) return;                               // the follow-cam owns the view
   if (performance.now() - lastUserPan < 8000) return;   // the user is driving the camera
   const pad = 80;
   const { scrollLeft, scrollTop, clientWidth, clientHeight } = mapwrap;
@@ -1813,6 +1877,7 @@ function applyRotation() {
 }
 mapwrap.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
+  if (followId) { exitFollow(); return; }   // step back out of the city first
   e.preventDefault();
   dragPan = { x: e.clientX, y: e.clientY, st: mapwrap.scrollTop, az: AZ };
   mapwrap.classList.add('dragging');
