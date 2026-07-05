@@ -116,9 +116,9 @@
 
   .signtext { font: 700 9px ui-monospace, Menlo, monospace; fill: #F2EFE4; }
   .floorlabel { font: 8.5px ui-monospace, Menlo, monospace; fill: rgba(0,0,0,0.48); transition: fill 0.3s; }
-  .floorlabel.night { fill: rgba(255,255,255,0.55); }
+  .floorlabel.night { fill: rgba(0,0,0,0.48); }
   .floorlabel.active { fill: #111; font-weight: 700; }
-  html.dark .floorlabel.active { fill: #fff; }
+  html.dark .floorlabel.active { fill: #111; }
   .bldg:hover { filter: url(#bglow); cursor: pointer; }
   .floorglow { animation: glowpulse 0.9s ease-in-out infinite; pointer-events: none; }
   @keyframes glowpulse { 0%,100% { opacity: 0.22; } 50% { opacity: 0.48; } }
@@ -962,6 +962,9 @@ const P = pts => pts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
 /* candy-city palette (reference style), lifted brighter and slightly desaturated */
 const BRIGHT = c => { const [h, s, l] = hexHsl(c); return hslHex(h, Math.min(1, s * 1.05), Math.min(0.92, l * 1.12 + 0.04)); };
 const WALLS = ['#2FB0C7', '#F27BAD', '#8F7BE8', '#4FC77B', '#4F7BE8', '#F2A055', '#E86A5A', '#C77BE8', '#E8C13F', '#7BD9E8'].map(BRIGHT);
+/* reference night palette: dusty saturated walls, fully lit against the black sky */
+const WALLS_N = ['#8B7BB8', '#EDE4D8', '#E8D44D', '#3D5FD9', '#F2A48F', '#9CC96B', '#F29BB8', '#C08A4A', '#5C7A9E', '#C4A8E0'];
+const GLASS_N = '#46A8BE';
 const ROOFS = ['#F2A0B8', '#A0D9C0', '#C0B8F2', '#F2D9A0', '#A0C4F2', '#F2B8A0', '#B8E8A0', '#E8A0E0'].map(BRIGHT);
 const GLASS = '#7BC9DE', GLASS_D = '#3E8FA3';
 /* reference facade grids: curtain-wall strips for towers, punched windows for low-rises */
@@ -1133,11 +1136,11 @@ function drawGround(w, h, spanX, spanY, cols, rows, N) {
   // grass world, paved plaza, street grid
   el('rect', { x: 0, y: 0, width: w, height: h, fill: N ? '#08090C' : '#FAFBEE' }, svg);
   const gx0 = -S_ISO, gx1 = spanX, gy0 = -S_ISO, gy1 = spanY;
-  el('polygon', { points: P([isoS(gx0 - 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy1 + 0.6), isoS(gx0 - 0.6, gy1 + 0.6)]), fill: N ? '#2C3140' : '#C6D3E4' }, svg);
+  el('polygon', { points: P([isoS(gx0 - 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy0 - 0.6), isoS(gx1 + 0.6, gy1 + 0.6), isoS(gx0 - 0.6, gy1 + 0.6)]), fill: N ? '#93A3C7' : '#C6D3E4' }, svg);
 
   const nf = NEARF || (() => true);
-  const asph = N ? '#20242F' : '#8CA3C4';
-  const dash = N ? '#7A8296' : '#F5F8FC';
+  const asph = N ? '#6F82A8' : '#8CA3C4';
+  const dash = N ? '#F5F8FC' : '#F5F8FC';
   for (let gy = 0; gy <= rows; gy++) {
     const y0 = gy * PITCH_Y - S_ISO;
     el('polygon', { points: P([isoS(gx0, y0), isoS(gx1, y0), isoS(gx1, y0 + S_ISO), isoS(gx0, y0 + S_ISO)]), fill: asph }, svg);
@@ -1157,7 +1160,7 @@ function drawGround(w, h, spanX, spanY, cols, rows, N) {
     }
   }
   // crosswalks + manholes + corner lamps
-  const zebra = N ? '#8A93A6' : '#F2EFE4';
+  const zebra = N ? '#F2EFE4' : '#F2EFE4';
   for (let gy = 0; gy <= rows; gy++) {
     for (let gx = 0; gx < cols; gx++) {
       if (!nf(gx * PITCH_X + 1, gy * PITCH_Y - S_ISO / 2)) continue;
@@ -1169,7 +1172,7 @@ function drawGround(w, h, spanX, spanY, cols, rows, N) {
       }
       if (rnd(gx * 3 + gy * 11 + 5) > 0.7) {
         const m = isoS(gx * PITCH_X + 1.8, y0 + S_ISO / 2 + 0.3);
-        el('ellipse', { cx: m.x, cy: m.y, rx: 7, ry: 3.5, fill: N ? '#161A24' : '#575E6B' }, svg);
+        el('ellipse', { cx: m.x, cy: m.y, rx: 7, ry: 3.5, fill: N ? '#57678C' : '#575E6B' }, svg);
       }
     }
   }
@@ -1260,7 +1263,6 @@ function buildCarBody(c, N) {
   if (T === 'taxi') body = '#F2C21F';
   if (T === 'police') body = '#F2F5FA';
   if (T === 'bus') body = '#E8734A';
-  if (N) body = shade(body, 0.95, 0.85);
   const sideC = shade(body, 1, 0.88), sideC2 = shade(body, 1, 0.78);
   const roofC = shade(body, 1, 1.12);
   const dark = shade(body, 1, 0.5);
@@ -1473,26 +1475,26 @@ function drawPedestrian(ix, iy, axis, seed, N) {
   const outfit = WALLS[Math.floor(rnd(seed + 9) * WALLS.length)];
   const skin = SKINS[Math.floor(rnd(seed + 11) * SKINS.length)];
   el('ellipse', { cx: p.x, cy: p.y + 1.5, rx: 4.5, ry: 2, fill: '#2B3345', opacity: 0.2 }, g);
-  el('rect', { x: p.x - 2.6, y: p.y - 11, width: 5.2, height: 9, rx: 2.4, fill: N ? shade(outfit, 0.9, 0.6) : outfit }, g);
+  el('rect', { x: p.x - 2.6, y: p.y - 11, width: 5.2, height: 9, rx: 2.4, fill: outfit }, g);
   el('circle', { cx: p.x, cy: p.y - 13.5, r: 2.8, fill: skin }, g);
 }
 
 function drawTreeAt(p, s, N, kind) {
   const g = el('g', { transform: `translate(${p.x} ${p.y}) scale(${s})` }, svg);
   el('ellipse', { cx: 4, cy: 3, rx: 26, ry: 10, fill: '#2B3345', opacity: 0.15 }, g);
-  const leaf = N ? '#2E4A3C' : '#63B04E', leaf2 = N ? '#3A5C4A' : '#8FCB6B', leaf3 = N ? '#28422F' : '#3E8A52';
+  const leaf = N ? '#2F6B45' : '#63B04E', leaf2 = N ? '#4E9256' : '#8FCB6B', leaf3 = N ? '#255C3B' : '#3E8A52';
   const canopy = el('g', { class: 'sway', style: `animation-delay:-${(p.x % 7).toFixed(1)}s` }, g);
   if (kind === 'palm') {
-    el('path', { d: 'M -2 0 C -4 -22 2 -40 6 -56', stroke: N ? '#4A3A2E' : '#8B6142', 'stroke-width': 6, fill: 'none', 'stroke-linecap': 'round' }, g);
+    el('path', { d: 'M -2 0 C -4 -22 2 -40 6 -56', stroke: N ? '#8578B8' : '#8B6142', 'stroke-width': 6, fill: 'none', 'stroke-linecap': 'round' }, g);
     for (const [rx, ry, ang] of [[22, 8, -30], [22, 8, 25], [18, 7, -70], [18, 7, 70], [20, 7, 0]]) {
       el('ellipse', { cx: 6, cy: -58, rx, ry, fill: leaf3, transform: `rotate(${ang} 6 -58)` }, canopy);
     }
   } else if (kind === 'tall') {
-    el('rect', { x: -3, y: -44, width: 6, height: 44, rx: 3, fill: N ? '#4A3A2E' : '#8B6142' }, g);
+    el('rect', { x: -3, y: -44, width: 6, height: 44, rx: 3, fill: N ? '#8578B8' : '#8B6142' }, g);
     el('ellipse', { cx: 0, cy: -62, rx: 15, ry: 24, fill: leaf3 }, canopy);
     el('ellipse', { cx: 0, cy: -70, rx: 10, ry: 15, fill: leaf }, canopy);
   } else {
-    el('rect', { x: -4, y: -34, width: 8, height: 34, rx: 3, fill: N ? '#4A3A2E' : '#8B6142' }, g);
+    el('rect', { x: -4, y: -34, width: 8, height: 34, rx: 3, fill: N ? '#8578B8' : '#8B6142' }, g);
     el('circle', { cx: 0, cy: -50, r: 22, fill: leaf }, canopy);
     el('circle', { cx: -15, cy: -38, r: 14, fill: leaf3 }, canopy);
     el('circle', { cx: 15, cy: -38, r: 14, fill: leaf }, canopy);
@@ -1504,35 +1506,27 @@ function drawParkLot(gx, gy, N) {
   const bx = gx * PITCH_X, by = gy * PITCH_Y;
   el('polygon', {
     points: P([isoS(bx + 0.1, by + 0.1), isoS(bx + W_ISO - 0.1, by + 0.1), isoS(bx + W_ISO - 0.1, by + D_ISO - 0.1), isoS(bx + 0.1, by + D_ISO - 0.1)]),
-    fill: N ? '#22402C' : '#9CCB6B',
+    fill: N ? '#6FA653' : '#9CCB6B',
   }, svg);
   // winding path
   const p1 = isoS(bx + 0.2, by + D_ISO * 0.55), p2 = isoS(bx + W_ISO * 0.5, by + D_ISO * 0.35), p3 = isoS(bx + W_ISO - 0.15, by + D_ISO * 0.7);
-  el('path', { d: `M ${p1.x} ${p1.y} Q ${p2.x} ${p2.y} ${p3.x} ${p3.y}`, stroke: N ? '#3A4152' : '#E8DFC8', 'stroke-width': 9, fill: 'none', 'stroke-linecap': 'round', opacity: 0.85 }, svg);
+  el('path', { d: `M ${p1.x} ${p1.y} Q ${p2.x} ${p2.y} ${p3.x} ${p3.y}`, stroke: N ? '#8A9BC0' : '#E8DFC8', 'stroke-width': 9, fill: 'none', 'stroke-linecap': 'round', opacity: 0.85 }, svg);
   const pond = isoS(bx + W_ISO * 0.62, by + D_ISO * 0.6);
-  el('ellipse', { cx: pond.x, cy: pond.y, rx: 26, ry: 12, fill: N ? '#22334D' : '#7FB8D9' }, svg);
-  el('ellipse', { cx: pond.x - 6, cy: pond.y - 2, rx: 8, ry: 3, fill: N ? '#31456B' : '#A8D4EC' }, svg);
+  el('ellipse', { cx: pond.x, cy: pond.y, rx: 26, ry: 12, fill: N ? '#5C7FBF' : '#7FB8D9' }, svg);
+  el('ellipse', { cx: pond.x - 6, cy: pond.y - 2, rx: 8, ry: 3, fill: N ? '#89A8DC' : '#A8D4EC' }, svg);
   drawTreeAt(isoS(bx + 0.7, by + 0.7), 1, N, 'round');
   drawTreeAt(isoS(bx + W_ISO - 0.8, by + 0.9), 0.85, N, 'palm');
   drawTreeAt(isoS(bx + 1.1, by + D_ISO - 0.6), 0.9, N, 'tall');
   drawTreeAt(isoS(bx + 2.2, by + D_ISO - 0.4), 0.7, N, 'round');
   for (let fl = 0; fl < 7; fl++) {
     const fp = isoS(bx + 0.3 + rnd(gx * 31 + fl) * (W_ISO - 0.6), by + 0.3 + rnd(gy * 37 + fl * 3) * (D_ISO - 0.6));
-    el('circle', { cx: fp.x, cy: fp.y, r: 2.2, fill: ['#F26AA0', '#F2C21F', '#FFFFFF', '#E86A5A'][fl % 4], opacity: N ? 0.5 : 0.95 }, svg);
+    el('circle', { cx: fp.x, cy: fp.y, r: 2.2, fill: ['#F26AA0', '#F2C21F', '#FFFFFF', '#E86A5A'][fl % 4], opacity: 0.95 }, svg);
   }
   isoBox(svg, bx + 1.9, by + 1.9, 0.7, 0.22, 4, 10, N ? '#6E5A45' : '#B08A5F', N ? '#5A4A38' : '#96744E', N ? '#4A3D2E' : '#7E6242');
 }
 
 function drawWeather(w, h, spanX, spanY, N) {
-  if (N) {
-    el('circle', { cx: w - 220, cy: 130, r: 34, fill: '#F2EFD9' }, svg);
-    el('circle', { cx: w - 232, cy: 121, r: 7, fill: '#DCD9C0' }, svg);
-    el('circle', { cx: w - 208, cy: 141, r: 5, fill: '#DCD9C0' }, svg);
-    for (let i = 0; i < 40; i++) {
-      el('circle', { cx: rnd(i * 3) * w, cy: rnd(i * 7 + 1) * 160, r: rnd(i + 5) * 1.2 + 0.4, fill: '#E8F0FF', opacity: (0.3 + rnd(i) * 0.5).toFixed(2) }, svg);
-    }
-    return;
-  }
+  if (N) return;   // reference night: pure black void, no moon or stars
   // drifting clouds with shadows on the city below
   for (let i = 0; i < 4; i++) {
     const gp = isoS(0.5 + rnd(i * 5 + 2) * spanX, 0.5 + rnd(i * 9 + 4) * spanY);
@@ -1619,12 +1613,12 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
     return;
   }
 
-  // buildings keep their daytime colors in dark mode — only the sky and windows change
-  let wall = WALLS[i % WALLS.length];
+  // night uses the reference palette: dusty rich walls, fully lit against the black sky
+  let wall = (N ? WALLS_N : WALLS)[i % WALLS.length];
   if (style === 'eiffel') wall = '#A87C58';   // riveted iron
   const faceR = shade(wall, 1, 0.86);   // reference two-tone: side face a notch deeper
-  let roof = shade(wall, 1.12, 0.62);   // roof slab in a darker cut of the wall hue
-  if (style === 'pagoda' || style === 'dome' || style === 'clock') roof = ROOFS[Math.floor(rnd(i * 7 + 2) * ROOFS.length)];
+  let roof = N ? shade(wall, 1, 1.06) : shade(wall, 1.12, 0.62);   // ref night roofs match the walls
+  if (!N && (style === 'pagoda' || style === 'dome' || style === 'clock')) roof = ROOFS[Math.floor(rnd(i * 7 + 2) * ROOFS.length)];
   const trim = shade(wall, 1.05, 0.72);
   const g = el('g', { class: 'bldg' }, svg);
   el('title', {}, g).textContent = b.full;
@@ -1749,7 +1743,7 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
   }
 
   // ground floor: full-glass storefront with mullions + dark entrance
-  el('polygon', { points: P([PFt(0.04, 3), PFt(0.96, 3), PFt(0.96, LOBBY_HZ - 5), PFt(0.04, LOBBY_HZ - 5)]), fill: N ? '#22304A' : GLASS }, g);
+  el('polygon', { points: P([PFt(0.04, 3), PFt(0.96, 3), PFt(0.96, LOBBY_HZ - 5), PFt(0.04, LOBBY_HZ - 5)]), fill: N ? GLASS_N : GLASS }, g);
   for (const tm of [0.27, 0.5, 0.73]) {
     el('polygon', { points: P([PFt(tm, 3), PFt(tm + 0.012, 3), PFt(tm + 0.012, LOBBY_HZ - 5), PFt(tm, LOBBY_HZ - 5)]), fill: shade(wall, 1, 0.92) }, g);
   }
@@ -1783,12 +1777,12 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
     const drop = style === 'clock' ? 22 : 0;   // sit below the clock face
     const h1 = H - 8 - drop, h0 = H - 26 - drop;
     const white = rnd(i * 41 + 3) > 0.5;
-    const panel = white ? (N ? '#141C2E' : '#FFFFFF') : shade(wall, 1.18, N ? 0.35 : 0.4);
-    const txtCol = white ? (N ? '#F2EFD9' : shade(wall, 1.2, 0.38)) : '#FFFFFF';
+    const panel = white ? '#FFFFFF' : shade(wall, 1.18, 0.4);
+    const txtCol = white ? shade(wall, 1.2, 0.38) : '#FFFFFF';
     el('polygon', {
       points: P([PFt(0.08, h1), PFt(0.92, h1), PFt(0.92, h0), PFt(0.08, h0)]),
       fill: panel,
-      stroke: white ? shade(wall, 1, N ? 1.2 : 0.75) : shade(wall, 1, N ? 1.3 : 1.35),
+      stroke: white ? shade(wall, 1, 0.75) : shade(wall, 1, 1.35),
       'stroke-width': 1.2,
     }, g);
     const lp2 = PFt(0.5, (h0 + h1) / 2 - 4.5);
@@ -1804,13 +1798,13 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
   if (H <= 70 || style === 'eiffel') {
     el('polygon', {
       points: P([PFt(0.08, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ + 10), PFt(0.08, LOBBY_HZ + 10)]),
-      fill: N ? '#141C2E' : '#FFFFFF', stroke: N ? shade(wall, 1, 1.15) : shade(wall, 1, 0.8), 'stroke-width': 1,
+      fill: '#FFFFFF', stroke: shade(wall, 1, 0.8), 'stroke-width': 1,
     }, g);
     const sp2 = PFt(0.5, LOBBY_HZ + 0.5);
     const nameT = el('text', {
       x: sp2.x, y: sp2.y, 'text-anchor': 'middle',
       transform: `rotate(${ang.toFixed(1)} ${sp2.x} ${sp2.y})`,
-      style: `font: 700 8.5px ui-monospace, Menlo, monospace; fill: ${N ? '#F2EFD9' : '#2B2F3A'}`,
+      style: 'font: 700 8.5px ui-monospace, Menlo, monospace; fill: #2B2F3A',
     }, g);
     nameT.textContent = b.name.length > 14 ? b.name.slice(0, 13) + '…' : b.name;
     el('title', {}, nameT).textContent = b.full;
@@ -1873,20 +1867,18 @@ function puffAt(x, y, N) {
 function drawFloorIso(g, bi, fi, f, PFt, PRt, ctx, N) {
   const hb = LOBBY_HZ + fi * FLOOR_HZ, ht = hb + FLOOR_HZ;
   const wins = [];
+  const GL = N ? GLASS_N : GLASS;
   if (ctx.tower) {
     // curtain wall: continuous glass columns floor-to-ceiling, thin mullions between
-    for (const [wi, [t0, t1]] of T_STRIPS.entries()) {
-      const lit = N && rnd(bi * 131 + fi * 17 + wi * 7) > 0.55;
+    for (const [t0, t1] of T_STRIPS) {
       wins.push(el('polygon', {
         points: P([PFt(t0, ht), PFt(t1, ht), PFt(t1, hb), PFt(t0, hb)]),
-        fill: lit ? '#FFD98A' : (N ? '#25314A' : GLASS),
+        fill: GL,
       }, g));
-      if (!lit && !N) {
-        el('polygon', {
-          points: P([PFt(t0, ht), PFt(t0 + 0.025, ht), PFt(t0 + 0.025, hb), PFt(t0, hb)]),
-          fill: '#A9E0EE',
-        }, g);
-      }
+      el('polygon', {
+        points: P([PFt(t0, ht), PFt(t0 + 0.025, ht), PFt(t0 + 0.025, hb), PFt(t0, hb)]),
+        fill: N ? '#6FC3D6' : '#A9E0EE',
+      }, g);
     }
     // transom: faint floor line across the glass
     el('polygon', {
@@ -1894,31 +1886,28 @@ function drawFloorIso(g, bi, fi, f, PFt, PRt, ctx, N) {
       fill: shade(ctx.wallC, 1, 0.8), opacity: 0.35,
     }, g);
     if (ctx.wAt(hb) > 0.92) {
-      for (const [si, [t0, t1]] of S_STRIPS.entries()) {
-        const litR = N && rnd(bi * 131 + fi * 17 + 91 + si * 5) > 0.6;
+      for (const [t0, t1] of S_STRIPS) {
         wins.push(el('polygon', {
           points: P([PRt(t0, ht), PRt(t1, ht), PRt(t1, hb), PRt(t0, hb)]),
-          fill: litR ? '#FFD98A' : (N ? '#20293E' : shade(GLASS, 1, 0.86)),
+          fill: shade(GL, 1, 0.86),
         }, g));
       }
     }
   } else {
     // low-rise: punched windows with pale frames, reference style
-    for (const [wi, [t0, t1]] of F_PUNCH.entries()) {
-      const lit = N && rnd(bi * 131 + fi * 17 + wi * 7) > 0.55;
+    for (const [t0, t1] of F_PUNCH) {
       wins.push(el('polygon', {
         points: P([PFt(t0, ht - 3), PFt(t1, ht - 3), PFt(t1, hb + 3), PFt(t0, hb + 3)]),
-        fill: lit ? '#FFD98A' : (N ? '#25314A' : GLASS),
-        stroke: N ? '#8A93A6' : '#F7F7F2', 'stroke-width': 1.5,
+        fill: GL,
+        stroke: '#F7F7F2', 'stroke-width': 1.5,
       }, g));
     }
     if (ctx.wAt(hb) > 0.92) {
-      for (const [si, [t0, t1]] of [[0, [0.16, 0.34]], [1, [0.46, 0.64]]].entries()) {
-        const litR = N && rnd(bi * 131 + fi * 17 + 91 + si * 5) > 0.6;
+      for (const [t0, t1] of [[0.16, 0.34], [0.46, 0.64]]) {
         wins.push(el('polygon', {
           points: P([PRt(t0, ht - 3), PRt(t1, ht - 3), PRt(t1, hb + 3), PRt(t0, hb + 3)]),
-          fill: litR ? '#FFD98A' : (N ? '#20293E' : shade(GLASS, 1, 0.86)),
-          stroke: N ? '#6E7987' : '#E8E4DC', 'stroke-width': 1.2,
+          fill: shade(GL, 1, 0.86),
+          stroke: '#E8E4DC', 'stroke-width': 1.2,
         }, g));
       }
     }
@@ -2413,7 +2402,7 @@ function renderRide(dt) {
   ctx.fillRect(0, horizonY, vw, vh - horizonY);
 
   // streets as short segments (stable under perspective), then park lawns
-  const asph = N ? '#20242F' : '#8CA3C4';
+  const asph = N ? '#6F82A8' : '#8CA3C4';
   const R = 17;
   for (let gy = 0; gy <= WORLD.rows; gy++) {
     const y0 = gy * PITCH_Y - S_ISO;
