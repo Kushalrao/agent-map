@@ -11,7 +11,7 @@
   body { font: 15px/1.6 -apple-system, "SF Pro Text", "Segoe UI", Helvetica, sans-serif; -webkit-font-smoothing: antialiased; }
 
   #logo { position: fixed; top: 34px; left: 44px; z-index: 20; }
-  #logo img { height: 74px; filter: drop-shadow(2px 3px 0 #000000); display: block; }
+  #logo img { height: clamp(44px, 10vw, 74px); filter: drop-shadow(2px 3px 0 #000000); display: block; }
 
   /* scroll stage: the city stays pinned while scroll morphs front → iso */
   .stage { height: 360vh; position: relative; }
@@ -31,7 +31,7 @@
   }
   .copy p {
     max-width: min(806px, 92vw); text-align: center;
-    font-size: 30px; line-height: 1.4; font-weight: 500; color: #6E7278;
+    font-size: clamp(19px, 4.5vw, 30px); line-height: 1.4; font-weight: 500; color: #6E7278;
     letter-spacing: -0.3px;
   }
 
@@ -59,7 +59,7 @@
   .repo { padding: 20px 24px 0; text-align: center; }
   .repo-label {
     display: block; width: min(640px, 100%); margin: 0 auto 20px;
-    text-align: center; font-size: 28px; font-weight: 800; color: #C6F24E;
+    text-align: center; font-size: clamp(20px, 5.5vw, 28px); font-weight: 800; color: #C6F24E;
     letter-spacing: -0.3px;
   }
   .repo-fields { display: flex; gap: 12px; width: min(640px, 100%); margin: 0 auto; }
@@ -83,7 +83,7 @@
   /* "shipping soon" note, centered above the character roster */
   .shipping-soon {
     text-align: center; padding: 60px 24px 0;
-    font-size: 80px; font-weight: 600; letter-spacing: -0.2px; color: #C6F24E;
+    font-size: clamp(32px, 10vw, 80px); font-weight: 600; letter-spacing: -0.2px; color: #C6F24E;
   }
 
   /* the roster grid — interactive: picking a character changes who works the tower */
@@ -99,6 +99,14 @@
     text-align: center; padding: 24px 24px 48px;
     border-top: 1px solid #1E2024; margin: 24px 24px 0;
     font-size: 14px; color: #6E7278;
+  }
+
+  /* mobile: the input+button row is too tight side by side, so stack them;
+     the sample-city margins also feel oversized on a short, narrow screen */
+  @media (max-width: 480px) {
+    .repo-fields { flex-direction: column; }
+    .repo-submit { padding: 16px 26px; }
+    .bldg { margin-top: 30px; margin-bottom: 80px; }
   }
 </style>
 </head>
