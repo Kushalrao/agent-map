@@ -54,7 +54,7 @@
     font: 13px/1.5 -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
     height: 100vh; overflow: hidden;
   }
-  #mapwrap { width: 100%; height: 100%; overflow: auto; background: var(--bg); cursor: grab; user-select: none; -webkit-user-select: none; }
+  #mapwrap { width: 100%; height: 100%; overflow: auto; background: var(--bg); cursor: grab; user-select: none; -webkit-user-select: none; perspective: 800px; perspective-origin: 50% 88%; }
   #mapwrap.dragging { cursor: grabbing; }
   #mapwrap.following { overflow: hidden; }
   svg { display: block; will-change: transform; }
@@ -67,7 +67,7 @@
   }
   #rideVeil {
     position: fixed; inset: 0; z-index: 5; display: none; pointer-events: none;
-    background: radial-gradient(ellipse 66% 58% at 50% 78%, transparent 54%, var(--bg) 95%);
+    background: radial-gradient(ellipse 70% 62% at 50% 84%, transparent 56%, var(--bg) 96%);
   }
 
   #picker {
@@ -2164,8 +2164,8 @@ function tick(ts) {
 requestAnimationFrame(tick);
 
 /* ---------- the camera: zoom deep into the city, ride agents, walk the streets ---------- */
-let followId = null, followZ = 5.6;
-const cam = { x: 0, y: 0, z: 1, ay: 0.62, active: false, freeZoom: false };
+let followId = null, followZ = 6.0;
+const cam = { x: 0, y: 0, z: 1, ay: 0.62, tilt: 0, active: false, freeZoom: false };
 const followHudEl = () => document.getElementById('followHud');
 function camOn() {
   if (cam.active) return;
@@ -2209,13 +2209,14 @@ function updateCamera(dt) {
   if (!cam.active) return;
   const step0 = dt || 0.016;
   const vw = mapwrap.clientWidth, vh = mapwrap.clientHeight;
-  cam.ay += ((followId ? 0.86 : 0.62) - cam.ay) * 0.05;   // chase-cam sits low, right behind the agent
+  cam.ay += ((followId ? 0.92 : 0.62) - cam.ay) * 0.05;   // chase-cam sits at the agent's heels
+  cam.tilt += ((followId ? -11 : 0) - cam.tilt) * 0.05;   // lean back: the towers ahead loom overhead
   if (followId) {
     const a = agents.get(followId);
     if (!a) dismount();
     else {
       cam.x += (a.x - cam.x) * 0.10;
-      cam.y += ((a.y - 16) - cam.y) * 0.10;
+      cam.y += ((a.y - 6) - cam.y) * 0.10;
       cam.z += (followZ - cam.z) * 0.07;
       // steer smoothly in behind the agent's heading; ignore ladders and micro-segments
       if (a.state === 'moving' && a.path[a.seg + 1]) {
@@ -2261,6 +2262,7 @@ function updateCamera(dt) {
     svg.style.transformOrigin = '0 0';
     svg.style.transform =
       `translate(${(vw / 2).toFixed(1)}px, ${(vh * cam.ay).toFixed(1)}px) ` +
+      (Math.abs(cam.tilt) > 0.05 ? `rotateX(${cam.tilt.toFixed(2)}deg) ` : '') +
       `rotate(${(dRes * 180 / Math.PI).toFixed(3)}deg) ` +
       `scale(${cam.z.toFixed(3)}) translate(${(-cam.x).toFixed(1)}px, ${(-cam.y).toFixed(1)}px)`;
   }
@@ -2269,7 +2271,7 @@ function updateCamera(dt) {
 function zoomAt(sx, sy, f) {
   camOn();
   const vw = mapwrap.clientWidth, vh = mapwrap.clientHeight;
-  if (followId) { followZ = Math.min(6.5, Math.max(1.6, followZ * f)); return; }
+  if (followId) { followZ = Math.min(7.5, Math.max(1.6, followZ * f)); return; }
   const wx = (sx - vw / 2) / cam.z + cam.x;
   const wy = (sy - vh * cam.ay) / cam.z + cam.y;
   cam.z = Math.min(6.5, Math.max(1, cam.z * f));
