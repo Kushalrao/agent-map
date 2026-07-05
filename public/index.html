@@ -1765,8 +1765,21 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
   }
 
   // square "brand" plate with the folder's initial
+
+  // floors, bottom-up: one per file
+  const ctx = {
+    trim, ang, wAt,
+    tower: floors >= 5, wallC: wall,
+    axw: ax, ayw: ay, bxw: bx, byw: by,
+    streetIso, vx: vxc,
+  };
+  ctx.base = baseScr;
+  b.files.forEach((f, fi) => stations.set(f.path, drawFloorIso(g, i, fi, f, PFt, PRt, ctx, N)));
+
+  // main heading, drawn ABOVE the floors so nothing covers it
+  void capH;
   if (H > 70 && style !== 'eiffel') {
-    // the main heading: a wide brand banner high on the facade (Capital One style)
+    // wide brand banner high on the facade (Capital One style)
     const drop = style === 'clock' ? 22 : 0;   // sit below the clock face
     const h1 = H - 8 - drop, h0 = H - 26 - drop;
     const white = rnd(i * 41 + 3) > 0.5;
@@ -1787,19 +1800,7 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
     it.textContent = b.name.length > 16 ? b.name.slice(0, 15) + '…' : b.name;
     el('title', {}, it).textContent = b.full;
   }
-
-  // floors, bottom-up: one per file
-  const ctx = {
-    trim, ang, wAt,
-    tower: floors >= 5, wallC: wall,
-    axw: ax, ayw: ay, bxw: bx, byw: by,
-    streetIso, vx: vxc,
-  };
-  ctx.base = baseScr;
-  b.files.forEach((f, fi) => stations.set(f.path, drawFloorIso(g, i, fi, f, PFt, PRt, ctx, N)));
-
   // low-rises carry their heading on the white storefront board instead (Bank of America style)
-  void capH;
   if (H <= 70 || style === 'eiffel') {
     el('polygon', {
       points: P([PFt(0.08, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ + 10), PFt(0.08, LOBBY_HZ + 10)]),
