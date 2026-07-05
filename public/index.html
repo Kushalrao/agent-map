@@ -1029,12 +1029,36 @@ function buildMap(root) {
   SPAWN.x = sp.x; SPAWN.y = sp.y;
 
   agentLayer = el('g', {}, svg);
+  // invert the PREVIOUS projection so mid-route agents carry over smoothly
+  const prev = builtProj;
+  const invPrev = (px, py) => {
+    const u = (px - prev.ox) / KX, v = (py - prev.oy) / KY;
+    return {
+      x: u * Math.cos(prev.az) + v * Math.sin(prev.az),
+      y: -u * Math.sin(prev.az) + v * Math.cos(prev.az),
+    };
+  };
   for (const a of oldAgents) {
     agentLayer.appendChild(a.g);
     const st = a.lastFile && stations.get(a.lastFile);
     if (st && a.state === 'working') {
       a.x = st.perch.x; a.y = st.perch.y;
       a.aloft = true; a.wayDown = st.wayDown.slice(); a.iso = { ...st.streetIso };
+    } else if (prev && a.state === 'moving') {
+      // re-plan the remaining route in the new projection from where they stand
+      const curIso = invPrev(a.x, a.y);
+      const p = isoS(curIso.x, curIso.y);
+      a.x = p.x; a.y = p.y;
+      const jobSt = a.job && stations.get(a.job.file);
+      if (jobSt) {
+        a.path = dedupe([{ x: a.x, y: a.y }, ...streetRoute(curIso, jobSt.streetIso, jobSt.vx), jobSt.wallFoot, jobSt.ladderTop, jobSt.perch]);
+      } else {
+        const trg = a.iso || SPAWN.iso;
+        a.path = dedupe([{ x: a.x, y: a.y }, ...streetRoute(curIso, trg, trg.x)]);
+      }
+      a.seg = 0; a.segT = 0;
+      a.remaining = pathLength(a.path);
+      a.aloft = false; a.wayDown = null;
     } else {
       a.iso = a.iso || { ...SPAWN.iso };
       const p = isoS(a.iso.x, a.iso.y);
@@ -1042,6 +1066,7 @@ function buildMap(root) {
     }
     a.moveTo(a.x, a.y);
   }
+  builtProj = { ox: OX, oy: OY, az: AZ };
 }
 
 function drawGround(w, h, spanX, spanY, cols, rows, N) {
@@ -1584,6 +1609,7 @@ function drawFloorIso(g, bi, fi, f, PFt, PRt, ctx, N) {
 let INTRO = true;              // first build plays the construction sequence
 let knownDirs = new Set();     // later, only brand-new buildings rise
 let riseKeys = null;
+let builtProj = null;          // projection of the last build, for carrying agents across rebuilds
 
 let treeCache = null;
 async function refreshMap() {
@@ -1853,13 +1879,14 @@ requestAnimationFrame(tick);
 
 /* ---------- the camera: zoom deep into the city, ride agents, walk the streets ---------- */
 let followId = null, followZ = 3.4;
-const cam = { x: 0, y: 0, z: 1, active: false, freeZoom: false };
+const cam = { x: 0, y: 0, z: 1, ay: 0.62, active: false, freeZoom: false };
 const followHudEl = () => document.getElementById('followHud');
 function camOn() {
   if (cam.active) return;
   const vw = mapwrap.clientWidth, vh = mapwrap.clientHeight;
+  cam.ay = 0.62;
   cam.x = mapwrap.scrollLeft + vw / 2;
-  cam.y = mapwrap.scrollTop + vh * 0.62;
+  cam.y = mapwrap.scrollTop + vh * cam.ay;
   cam.z = 1;
   cam.active = true;
   mapwrap.classList.add('following');
@@ -1885,6 +1912,7 @@ function exitToOverview() {
 function updateCamera() {
   if (!cam.active) return;
   const vw = mapwrap.clientWidth, vh = mapwrap.clientHeight;
+  cam.ay += ((followId ? 0.74 : 0.62) - cam.ay) * 0.05;   // chase-cam sits behind/below the agent
   if (followId) {
     const a = agents.get(followId);
     if (!a) dismount();
@@ -1892,6 +1920,23 @@ function updateCamera() {
       cam.x += (a.x - cam.x) * 0.10;
       cam.y += ((a.y - 30) - cam.y) * 0.10;
       cam.z += (followZ - cam.z) * 0.07;
+      // steer the world: rotate the city so the agent runs away from the camera,
+      // and swing around behind them when they turn a corner
+      if (a.state === 'moving' && a.path[a.seg + 1] && !rotBusy) {
+        const p0 = a.path[a.seg], p1 = a.path[a.seg + 1];
+        const dsx = p1.x - p0.x, dsy = p1.y - p0.y;
+        if (Math.abs(dsx) > Math.abs(dsy) * 0.45) {   // street legs steer; ladder climbs don't
+          const u = dsx / KX, v = dsy / KY;
+          const dix = u * Math.cos(AZ) + v * Math.sin(AZ);
+          const diy = -u * Math.sin(AZ) + v * Math.cos(AZ);
+          const tgt = Math.atan2(dix, diy) + Math.PI;   // heading maps to screen-up
+          const diff = ((tgt - AZ + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+          if (Math.abs(diff) > 0.012) {
+            AZ += diff * 0.09;
+            applyRotation();
+          }
+        }
+      }
     }
   } else if (!cam.freeZoom) {
     cam.z += (1 - cam.z) * 0.14;
@@ -1899,13 +1944,13 @@ function updateCamera() {
       cam.active = false;
       if (svg) svg.style.transform = '';
       mapwrap.classList.remove('following');
-      mapwrap.scrollTo({ left: cam.x - vw / 2, top: cam.y - vh * 0.62 });
+      mapwrap.scrollTo({ left: cam.x - vw / 2, top: cam.y - vh * cam.ay });
       return;
     }
   }
   if (svg) {
     svg.style.transformOrigin = '0 0';
-    svg.style.transform = `translate(${(vw / 2 - cam.x * cam.z).toFixed(1)}px, ${(vh * 0.62 - cam.y * cam.z).toFixed(1)}px) scale(${cam.z.toFixed(3)})`;
+    svg.style.transform = `translate(${(vw / 2 - cam.x * cam.z).toFixed(1)}px, ${(vh * cam.ay - cam.y * cam.z).toFixed(1)}px) scale(${cam.z.toFixed(3)})`;
   }
 }
 /* pinch / ctrl+scroll zooms toward the cursor — dive right down to street level */
@@ -1914,10 +1959,10 @@ function zoomAt(sx, sy, f) {
   const vw = mapwrap.clientWidth, vh = mapwrap.clientHeight;
   if (followId) { followZ = Math.min(6.5, Math.max(1.6, followZ * f)); return; }
   const wx = (sx - vw / 2) / cam.z + cam.x;
-  const wy = (sy - vh * 0.62) / cam.z + cam.y;
+  const wy = (sy - vh * cam.ay) / cam.z + cam.y;
   cam.z = Math.min(6.5, Math.max(1, cam.z * f));
   cam.x = wx - (sx - vw / 2) / cam.z;
-  cam.y = wy - (sy - vh * 0.62) / cam.z;
+  cam.y = wy - (sy - vh * cam.ay) / cam.z;
   cam.freeZoom = cam.z > 1.03;
 }
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape') exitToOverview(); });
@@ -1998,7 +2043,8 @@ pickBtn.onclick = () => pickMenu.classList.toggle('open');
 /* ---------- drag the city: horizontal = orbit the camera, vertical = pan ---------- */
 let dragPan = null, rotDirty = false, rotBusy = false;
 function focusPoint() {
-  const m = mainId && agents.get(mainId);
+  const f = followId && agents.get(followId);
+  const m = f || (mainId && agents.get(mainId));
   return m ? { x: m.x, y: m.y } : { x: SPAWN.x, y: SPAWN.y };
 }
 function applyRotation() {
@@ -2008,8 +2054,14 @@ function applyRotation() {
   const offX = before.x - mapwrap.scrollLeft, offY = before.y - mapwrap.scrollTop;
   rebuildScene();
   const after = focusPoint();
-  mapwrap.scrollLeft = after.x - offX;
-  mapwrap.scrollTop = after.y - offY;
+  if (cam.active) {
+    // the follow/zoom camera owns the view: shift it with the world so the focus stays pinned
+    cam.x += after.x - before.x;
+    cam.y += after.y - before.y;
+  } else {
+    mapwrap.scrollLeft = after.x - offX;
+    mapwrap.scrollTop = after.y - offY;
+  }
   setTimeout(() => {
     rotBusy = false;
     if (rotDirty) { rotDirty = false; applyRotation(); }
