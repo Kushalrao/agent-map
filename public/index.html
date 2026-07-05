@@ -963,6 +963,10 @@ const BRIGHT = c => { const [h, s, l] = hexHsl(c); return hslHex(h, Math.min(1, 
 const WALLS = ['#2FB0C7', '#F27BAD', '#8F7BE8', '#4FC77B', '#4F7BE8', '#F2A055', '#E86A5A', '#C77BE8', '#E8C13F', '#7BD9E8'].map(BRIGHT);
 const ROOFS = ['#F2A0B8', '#A0D9C0', '#C0B8F2', '#F2D9A0', '#A0C4F2', '#F2B8A0', '#B8E8A0', '#E8A0E0'].map(BRIGHT);
 const GLASS = '#7BC9DE', GLASS_D = '#3E8FA3';
+/* reference facade grids: curtain-wall strips for towers, punched windows for low-rises */
+const T_STRIPS = Array.from({ length: 7 }, (_, k) => [0.05 + k * 0.13, 0.14 + k * 0.13]);
+const S_STRIPS = Array.from({ length: 4 }, (_, k) => [0.08 + k * 0.24, 0.23 + k * 0.24]);
+const F_PUNCH = [[0.08, 0.26], [0.34, 0.52], [0.6, 0.78]];
 const SKINS = ['#F8C89A', '#C68642', '#8D5524', '#FFDBAC'];
 
 /* draw an isometric box: roof + the two camera-facing walls (azimuth-aware) */
@@ -1608,8 +1612,9 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
   // buildings keep their daytime colors in dark mode — only the sky and windows change
   let wall = WALLS[i % WALLS.length];
   if (style === 'eiffel') wall = '#A87C58';   // riveted iron
-  const faceR = shade(wall, 1, 0.93);   // both faces read as the same color, hint of depth only
-  const roof = ROOFS[Math.floor(rnd(i * 7 + 2) * ROOFS.length)];
+  const faceR = shade(wall, 1, 0.86);   // reference two-tone: side face a notch deeper
+  let roof = shade(wall, 1.12, 0.62);   // roof slab in a darker cut of the wall hue
+  if (style === 'pagoda' || style === 'dome' || style === 'clock') roof = ROOFS[Math.floor(rnd(i * 7 + 2) * ROOFS.length)];
   const trim = shade(wall, 1.05, 0.72);
   const g = el('g', {}, svg);
   el('title', {}, g).textContent = b.full;
@@ -1721,25 +1726,26 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
         el('circle', { cx: ap.x, cy: ap.y - H - 28, r: 3.5, fill: N ? '#FF6B6B' : trim }, g);
         capH = 30;
       }
-      const gi = el('text', {
-        x: rc.x, y: rc.y - H + 12, 'text-anchor': 'middle',
-        transform: `rotate(${ang.toFixed(1)} ${rc.x} ${rc.y - H + 12})`,
-        style: `font: 800 30px ui-monospace, Menlo, monospace; fill: ${N ? '#FFFFFF14' : '#00000018'}`,
-      }, g);
-      gi.textContent = b.name[0].toUpperCase();
     }
   }
 
-  // lobby: door with light + striped awning
-  el('polygon', { points: P([PFt(0.62, 0), PFt(0.84, 0), PFt(0.84, 15), PFt(0.62, 15)]), fill: shade(wall, 1, 0.45) }, g);
-  const dl = PFt(0.8, 8);
-  el('circle', { cx: dl.x, cy: dl.y, r: 1.6, fill: '#FFD98A' }, g);
-  for (let s = 0; s < 4; s++) {
-    el('polygon', {
-      points: P([PFt(0.60 + s * 0.065, 15), PFt(0.665 + s * 0.065, 15), PFt(0.665 + s * 0.065, 20), PFt(0.60 + s * 0.065, 20)]),
-      fill: s % 2 ? (N ? '#8A93A6' : '#F2EFE4') : trim,
-    }, g);
+  // parapet fascia: light rim along the roofline (reference detail)
+  if (style !== 'eiffel') {
+    el('polygon', { points: P([PFt(0, H - 3), PFt(1, H - 3), PFt(1, H), PFt(0, H)]), fill: shade(wall, 1, 1.22) }, g);
+    if (wAt(H - 1) > 0.9) el('polygon', { points: P([PRt(0, H - 3), PRt(1, H - 3), PRt(1, H), PRt(0, H)]), fill: shade(wall, 1, 1.05) }, g);
   }
+  if (style === 'box' || style === 'dome' || style === 'clock') {
+    el('line', { x1: C.x, y1: C.y, x2: C.x, y2: C.y - H + 2, stroke: shade(wall, 1, 0.7), 'stroke-width': 1.4, opacity: 0.7 }, g);
+  }
+
+  // ground floor: full-glass storefront with mullions + dark entrance
+  el('polygon', { points: P([PFt(0.04, 3), PFt(0.96, 3), PFt(0.96, LOBBY_HZ - 5), PFt(0.04, LOBBY_HZ - 5)]), fill: N ? '#22304A' : GLASS }, g);
+  for (const tm of [0.27, 0.5, 0.73]) {
+    el('polygon', { points: P([PFt(tm, 3), PFt(tm + 0.012, 3), PFt(tm + 0.012, LOBBY_HZ - 5), PFt(tm, LOBBY_HZ - 5)]), fill: shade(wall, 1, 0.92) }, g);
+  }
+  el('polygon', { points: P([PFt(0.44, 3), PFt(0.555, 3), PFt(0.555, LOBBY_HZ - 6), PFt(0.44, LOBBY_HZ - 6)]), fill: shade(wall, 1, 0.42) }, g);
+  const dl = PFt(0.535, 9);
+  el('circle', { cx: dl.x, cy: dl.y, r: 1.4, fill: '#FFD98A' }, g);
 
   // graffiti tag on the shadowed wall of some buildings
   if (rnd(i * 29 + 7) > 0.6 && style !== 'eiffel') {
@@ -1764,18 +1770,27 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
   // floors, bottom-up: one per file
   const ctx = {
     trim, ang, wAt,
+    tower: floors >= 5, wallC: wall,
     axw: ax, ayw: ay, bxw: bx, byw: by,
     streetIso, vx: vxc,
   };
   ctx.base = baseScr;
   b.files.forEach((f, fi) => stations.set(f.path, drawFloorIso(g, i, fi, f, PFt, PRt, ctx, N)));
 
-  // roof sign with the folder name
-  const sw = 16 + b.name.length * 6.4;
-  el('rect', { x: rc.x - sw / 2, y: rc.y - H - 9 - capH, width: sw, height: 15, rx: 7, fill: N ? '#101828' : '#2B2F3A', opacity: 0.92 }, g);
-  const t = el('text', { class: 'signtext', x: rc.x, y: rc.y - H + 2 - capH, 'text-anchor': 'middle' }, g);
-  t.textContent = b.name;
-  el('title', {}, t).textContent = b.full;
+  // big white sign board over the storefront, carrying the folder name (reference style)
+  void capH;
+  el('polygon', {
+    points: P([PFt(0.08, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ - 3), PFt(0.92, LOBBY_HZ + 10), PFt(0.08, LOBBY_HZ + 10)]),
+    fill: '#FFFFFF', stroke: shade(wall, 1, 0.8), 'stroke-width': 1,
+  }, g);
+  const sp2 = PFt(0.5, LOBBY_HZ + 0.5);
+  const nameT = el('text', {
+    x: sp2.x, y: sp2.y, 'text-anchor': 'middle',
+    transform: `rotate(${ang.toFixed(1)} ${sp2.x} ${sp2.y})`,
+    style: 'font: 700 8.5px ui-monospace, Menlo, monospace; fill: #2B2F3A',
+  }, g);
+  nameT.textContent = b.name.length > 14 ? b.name.slice(0, 13) + '…' : b.name;
+  el('title', {}, nameT).textContent = b.full;
 
   // ladder tracks the wall, even when the structure tapers
   const lcol = N ? '#5A6273' : '#4E5560';
@@ -1834,23 +1849,54 @@ function puffAt(x, y, N) {
 function drawFloorIso(g, bi, fi, f, PFt, PRt, ctx, N) {
   const hb = LOBBY_HZ + fi * FLOOR_HZ, ht = hb + FLOOR_HZ;
   const wins = [];
-  // vertical glass strips across the facade — they follow the structure's taper
-  for (let wi = 0; wi < 4; wi++) {
-    const t0 = 0.06 + wi * 0.135, t1 = t0 + 0.085;
-    const lit = N && rnd(bi * 131 + fi * 17 + wi * 7) > 0.55;
-    wins.push(el('polygon', {
-      points: P([PFt(t0, ht - 2.5), PFt(t1, ht - 2.5), PFt(t1, hb + 2.5), PFt(t0, hb + 2.5)]),
-      fill: lit ? '#FFD98A' : (N ? '#25314A' : GLASS),
-      stroke: lit ? 'none' : GLASS_D, 'stroke-width': 0.8,
-    }, g));
-  }
-  if (ctx.wAt(hb) > 0.92) {
-    for (const [si, [t0, t1]] of [[0, [0.18, 0.32]], [1, [0.44, 0.58]]].entries()) {
-      const litR = N && rnd(bi * 131 + fi * 17 + 91 + si * 5) > 0.6;
+  if (ctx.tower) {
+    // curtain wall: continuous glass columns floor-to-ceiling, thin mullions between
+    for (const [wi, [t0, t1]] of T_STRIPS.entries()) {
+      const lit = N && rnd(bi * 131 + fi * 17 + wi * 7) > 0.55;
       wins.push(el('polygon', {
-        points: P([PRt(t0, ht - 3), PRt(t1, ht - 3), PRt(t1, hb + 3), PRt(t0, hb + 3)]),
-        fill: litR ? '#FFD98A' : (N ? '#25314A' : shade(GLASS, 1, 0.9)),
+        points: P([PFt(t0, ht), PFt(t1, ht), PFt(t1, hb), PFt(t0, hb)]),
+        fill: lit ? '#FFD98A' : (N ? '#25314A' : GLASS),
       }, g));
+      if (!lit && !N) {
+        el('polygon', {
+          points: P([PFt(t0, ht), PFt(t0 + 0.025, ht), PFt(t0 + 0.025, hb), PFt(t0, hb)]),
+          fill: '#A9E0EE',
+        }, g);
+      }
+    }
+    // transom: faint floor line across the glass
+    el('polygon', {
+      points: P([PFt(0.05, hb + 0.9), PFt(0.96, hb + 0.9), PFt(0.96, hb), PFt(0.05, hb)]),
+      fill: shade(ctx.wallC, 1, 0.8), opacity: 0.35,
+    }, g);
+    if (ctx.wAt(hb) > 0.92) {
+      for (const [si, [t0, t1]] of S_STRIPS.entries()) {
+        const litR = N && rnd(bi * 131 + fi * 17 + 91 + si * 5) > 0.6;
+        wins.push(el('polygon', {
+          points: P([PRt(t0, ht), PRt(t1, ht), PRt(t1, hb), PRt(t0, hb)]),
+          fill: litR ? '#FFD98A' : (N ? '#20293E' : shade(GLASS, 1, 0.86)),
+        }, g));
+      }
+    }
+  } else {
+    // low-rise: punched windows with pale frames, reference style
+    for (const [wi, [t0, t1]] of F_PUNCH.entries()) {
+      const lit = N && rnd(bi * 131 + fi * 17 + wi * 7) > 0.55;
+      wins.push(el('polygon', {
+        points: P([PFt(t0, ht - 3), PFt(t1, ht - 3), PFt(t1, hb + 3), PFt(t0, hb + 3)]),
+        fill: lit ? '#FFD98A' : (N ? '#25314A' : GLASS),
+        stroke: N ? '#8A93A6' : '#F7F7F2', 'stroke-width': 1.5,
+      }, g));
+    }
+    if (ctx.wAt(hb) > 0.92) {
+      for (const [si, [t0, t1]] of [[0, [0.16, 0.34]], [1, [0.46, 0.64]]].entries()) {
+        const litR = N && rnd(bi * 131 + fi * 17 + 91 + si * 5) > 0.6;
+        wins.push(el('polygon', {
+          points: P([PRt(t0, ht - 3), PRt(t1, ht - 3), PRt(t1, hb + 3), PRt(t0, hb + 3)]),
+          fill: litR ? '#FFD98A' : (N ? '#20293E' : shade(GLASS, 1, 0.86)),
+          stroke: N ? '#6E7987' : '#E8E4DC', 'stroke-width': 1.2,
+        }, g));
+      }
     }
   }
 
