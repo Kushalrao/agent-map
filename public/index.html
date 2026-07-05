@@ -69,6 +69,7 @@
     position: fixed; inset: 0; z-index: 5; display: none; pointer-events: none;
     background: radial-gradient(ellipse 70% 62% at 50% 84%, transparent 56%, var(--bg) 96%);
   }
+  #rideView { position: fixed; inset: 0; z-index: 4; display: none; }
 
   #picker {
     position: fixed; left: 14px; top: 14px; z-index: 20;
@@ -161,6 +162,7 @@
     <div id="pickMenu"></div>
   </div>
   <button id="themeBtn" title="toggle day / night"></button>
+  <canvas id="rideView"></canvas>
   <div id="rideVeil"></div>
   <div id="followHud"></div>
   <div id="hud"><span id="status"></span><span id="watchdir">connecting…</span></div>
@@ -921,6 +923,7 @@ const CULL = { on: false, center: null, r: 12 };   // "ride bubble": draw only n
 let NEARF = null;
 const CARS = [];        // persistent traffic: each car loops its own block
 let SCENE_N = false;    // night flag of the current build (for corner re-skins)
+const WORLD = { buildings: [], parks: [], cols: 0, rows: 0, spanX: 0, spanY: 0 };   // data for the 3D ride
 let OX = 0, OY = 0;        // iso origin on the canvas
 let AZ = parseFloat(localStorage.getItem('agentview-az') || String(Math.PI / 4));   // camera azimuth — drag to orbit
 let vAZ = AZ;   // visual azimuth: moves smoothly every frame; AZ re-bakes geometry in coarse steps
@@ -1063,10 +1066,17 @@ function buildMap(root) {
   CULL.center = fa ? { ...curIsoPt(fa) } : null;
   NEARF = CULL.center ? ((x, y, rr = CULL.r) => Math.hypot(x - CULL.center.x, y - CULL.center.y) < rr) : null;
 
+  WORLD.buildings.length = 0;
+  WORLD.parks.length = 0;
+  WORLD.cols = cols; WORLD.rows = rows; WORLD.spanX = spanX; WORLD.spanY = spanY;
+
   let seq = 0;
   for (const { it, gx, gy } of lots) {
     const cx0 = gx * PITCH_X + W_ISO / 2, cy0 = gy * PITCH_Y + D_ISO / 2;
-    if (it.park) { if (!NEARF || NEARF(cx0, cy0)) drawParkLot(gx, gy, N); }
+    if (it.park) {
+      WORLD.parks.push({ bx: gx * PITCH_X, by: gy * PITCH_Y });
+      if (!NEARF || NEARF(cx0, cy0)) drawParkLot(gx, gy, N);
+    }
     else drawBuildingIso(it, colorOf.get(it), gx, gy, N, seq++, NEARF ? !NEARF(cx0, cy0) : false);
   }
 
@@ -1549,6 +1559,7 @@ function drawBuildingIso(b, i, gx, gy, N, seq, ghost) {
   const H = LOBBY_HZ + floors * FLOOR_HZ + 8;
   const rising = !ghost && (riseKeys === 'all' || (riseKeys && riseKeys.has(b.key)));
   const style = styleFor(i, floors);
+  WORLD.buildings.push({ bx, by, H, floors, style, seed: i, name: b.name });
 
   // silhouette: width factor by height gives each structure its shape
   let wAt = () => 1;
@@ -2002,7 +2013,7 @@ function makeAgent(id) {
       this.frame = i;
       this.frames.forEach((f, j) => f.setAttribute('visibility', j === i ? 'visible' : 'hidden'));
     },
-    face(dir) { flip.setAttribute('transform', dir < 0 ? 'scale(-1 1)' : 'scale(1 1)'); },
+    face(dir) { this.dirFace = dir; flip.setAttribute('transform', dir < 0 ? 'scale(-1 1)' : 'scale(1 1)'); },
     setPose(lean, bob) {
       pose.setAttribute('transform', `translate(0 ${bob.toFixed(2)}) rotate(${lean.toFixed(2)} 0 -34)`);
     },
@@ -2159,6 +2170,7 @@ function tick(ts) {
   }
   updateCars(dt);
   updateCamera(dt);
+  if (R3.active) renderRide(dt);
   requestAnimationFrame(tick);
 }
 requestAnimationFrame(tick);
@@ -2178,32 +2190,257 @@ function camOn() {
   mapwrap.classList.add('following');
   mapwrap.scrollTo(0, 0);
 }
+/* ---------- the 3D ride: a true grounded street view, camera looking UP ---------- */
+const R3 = {
+  active: false, cnv: null, ctx: null,
+  yaw: Math.PI / 4, dist: 2.6, sprites: new Map(),
+};
+function worldPosOf(a) {
+  if (a.state === 'moving' && a.pathIso && a.pathIso[a.seg + 1]) {
+    const p0 = a.pathIso[a.seg], p1 = a.pathIso[a.seg + 1];
+    return {
+      x: p0.x + (p1.x - p0.x) * a.segT,
+      y: p0.y + (p1.y - p0.y) * a.segT,
+      z: (p0.h || 0) + ((p1.h || 0) - (p0.h || 0)) * a.segT,
+    };
+  }
+  const c = curIsoPt(a);
+  return { x: c.x, y: c.y, z: c.h || 0 };
+}
+function spriteFramesFor(a) {
+  const key = `${charKey}|${a.id === 'fs-watcher' ? 'g' : a.variantIdx}`;
+  if (R3.sprites.has(key)) return R3.sprites.get(key);
+  const def = CHARACTERS[charKey];
+  const patch = a.id === 'fs-watcher' ? def.gray : def.variants[a.variantIdx % def.variants.length];
+  const colors = { ...def.colors, ...patch };
+  const SC = 6;
+  const frames = frameRows(def).map(rows => {
+    const c = document.createElement('canvas');
+    c.width = 12 * SC; c.height = rows.length * SC;
+    const cx = c.getContext('2d');
+    rows.forEach((row, ry) => {
+      for (let k = 0; k < row.length; k++) {
+        const col = colors[row[k]];
+        if (!col) continue;
+        cx.fillStyle = col;
+        cx.fillRect(k * SC, ry * SC, SC + 0.5, SC + 0.5);
+      }
+    });
+    return c;
+  });
+  R3.sprites.set(key, frames);
+  return frames;
+}
 function followAgent(id) {
-  camOn();
   followId = id;
-  CULL.on = true;
-  applyRotation();   // rebuild into the ride bubble (tiny scene = fast re-bakes)
-  document.getElementById('rideVeil').style.display = 'block';
+  R3.active = true;
+  R3.sprites.clear();
+  const a = agents.get(id);
+  if (a && a.iso) { const w = worldPosOf(a); R3.yaw = Math.atan2(0.01, 1); void w; }
+  if (!R3.cnv) {
+    R3.cnv = document.getElementById('rideView');
+    R3.ctx = R3.cnv.getContext('2d');
+    R3.cnv.addEventListener('pointerdown', () => exitToOverview());
+    R3.cnv.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      R3.dist = Math.min(4.5, Math.max(1.3, R3.dist * Math.exp(e.deltaY * 0.001)));
+    }, { passive: false });
+  }
+  const dpr = window.devicePixelRatio || 1;
+  R3.cnv.width = innerWidth * dpr; R3.cnv.height = innerHeight * dpr;
+  R3.cnv.style.display = 'block';
+  mapwrap.style.visibility = 'hidden';
   const hud = followHudEl();
-  hud.textContent = `⌖ riding with ${id} — click ground to hop off here, Esc to fly back out`;
+  hud.textContent = `⌖ street view: riding with ${id} — click or press Esc to fly back up`;
   hud.style.display = 'block';
 }
-function endRide() {
-  followId = null;
-  CULL.on = false;
-  followHudEl().style.display = 'none';
-  document.getElementById('rideVeil').style.display = 'none';
-  AZ = vAZ;
-  applyRotation();   // restore the full city
-}
-function dismount() {   // hop off but STAY down in the city
-  const keep = cam.z > 1.05;
-  endRide();
-  cam.freeZoom = keep;
-}
+function dismount() { exitToOverview(); }
 function exitToOverview() {
-  endRide();
+  followId = null;
+  if (R3.active) {
+    R3.active = false;
+    R3.cnv.style.display = 'none';
+    mapwrap.style.visibility = 'visible';
+  }
   cam.freeZoom = false;
+  followHudEl().style.display = 'none';
+}
+function renderRide(dt) {
+  const a = agents.get(followId);
+  if (!a) { exitToOverview(); return; }
+  const cnv = R3.cnv, ctx = R3.ctx;
+  const dpr = window.devicePixelRatio || 1;
+  if (cnv.width !== innerWidth * dpr) { cnv.width = innerWidth * dpr; cnv.height = innerHeight * dpr; }
+  const vw = innerWidth, vh = innerHeight;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const N = SCENE_N;
+
+  const wp = worldPosOf(a);
+  // steer the camera in behind the agent's ground heading
+  if (a.state === 'moving' && a.pathIso[a.seg + 1]) {
+    const p0 = a.pathIso[a.seg], p1 = a.pathIso[a.seg + 1];
+    if (Math.hypot(p1.x - p0.x, p1.y - p0.y) > 0.4 && !(p0.h || p1.h)) {
+      const tgt = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+      const d = ((tgt - R3.yaw + Math.PI) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+      R3.yaw += d * Math.min(1, 2.6 * (dt || 0.016));
+    }
+  }
+  const fx = Math.cos(R3.yaw), fy = Math.sin(R3.yaw);
+  const U = 42;                                  // world px per iso unit
+  const camX = wp.x - fx * R3.dist, camY = wp.y - fy * R3.dist;
+  const camZ = 34 + Math.max(0, wp.z * 0.8);     // ~1.5 floors up; rises gently on climbs
+  const pitch = 0.2 + Math.min(0.3, Math.max(0, wp.z - camZ) * 0.003);   // grounded, looking UP
+  const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
+  const f = vh * 1.05, ax0 = vw / 2, ay0 = vh * 0.6;
+  const proj = (X, Y, Z) => {
+    const dx = (X - camX) * U, dyw = (Y - camY) * U, dz = Z - camZ;
+    const vzf = dx * fx + dyw * fy;
+    const vxr = -dx * fy + dyw * fx;
+    const vz2 = vzf * cosP + dz * sinP;
+    if (vz2 < 6) return null;
+    const dz2 = dz * cosP - vzf * sinP;
+    const s = f / vz2;
+    return { x: ax0 + vxr * s, y: ay0 - dz2 * s, s, d: vz2 };
+  };
+  const quad = (pts, fill, stroke) => {
+    const q = pts.map(p => proj(p[0], p[1], p[2]));
+    if (q.some(p => !p)) return false;
+    ctx.beginPath();
+    ctx.moveTo(q[0].x, q[0].y);
+    for (let k = 1; k < 4; k++) ctx.lineTo(q[k].x, q[k].y);
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+    return true;
+  };
+
+  // sky, then ground below the horizon
+  const grad = ctx.createLinearGradient(0, 0, 0, vh);
+  if (N) { grad.addColorStop(0, '#0E1526'); grad.addColorStop(1, '#2E3A55'); }
+  else { grad.addColorStop(0, '#8FD0F0'); grad.addColorStop(0.7, '#BEE3F5'); grad.addColorStop(1, '#F2EAD8'); }
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, vw, vh);
+  if (N) {
+    ctx.fillStyle = '#E8F0FF';
+    for (let i = 0; i < 70; i++) {
+      ctx.globalAlpha = 0.25 + rnd(i) * 0.5;
+      ctx.fillRect((rnd(i * 3) * vw) | 0, (rnd(i * 7 + 1) * vh * 0.5) | 0, 1.6, 1.6);
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#F2EFD9';
+    ctx.beginPath(); ctx.arc(vw * 0.78, vh * 0.16, 26, 0, 7); ctx.fill();
+  } else {
+    ctx.fillStyle = '#FFD34D';
+    ctx.beginPath(); ctx.arc(vw * 0.78, vh * 0.14, 30, 0, 7); ctx.fill();
+    ctx.fillStyle = '#FFE28A';
+    ctx.beginPath(); ctx.arc(vw * 0.78, vh * 0.14, 23, 0, 7); ctx.fill();
+  }
+  const far = proj(camX + fx * 400, camY + fy * 400, 0);
+  const horizonY = far ? far.y : vh * 0.45;
+  ctx.fillStyle = N ? '#2C3140' : '#C6D3E4';
+  ctx.fillRect(0, horizonY, vw, vh - horizonY);
+
+  // streets as short segments (stable under perspective), then park lawns
+  const asph = N ? '#20242F' : '#8CA3C4';
+  const R = 17;
+  for (let gy = 0; gy <= WORLD.rows; gy++) {
+    const y0 = gy * PITCH_Y - S_ISO;
+    if (Math.abs(y0 - camY) > R + 4) continue;
+    for (let x = Math.floor(camX - R); x < camX + R; x += 3) {
+      quad([[x, y0, 0], [x + 3, y0, 0], [x + 3, y0 + S_ISO, 0], [x, y0 + S_ISO, 0]], asph);
+    }
+  }
+  for (let gx = 0; gx <= WORLD.cols; gx++) {
+    const x0 = gx * PITCH_X - S_ISO;
+    if (Math.abs(x0 - camX) > R + 4) continue;
+    for (let y = Math.floor(camY - R); y < camY + R; y += 3) {
+      quad([[x0, y, 0], [x0 + S_ISO, y, 0], [x0 + S_ISO, y + 3, 0], [x0, y + 3, 0]], asph);
+    }
+  }
+  for (const p of WORLD.parks) {
+    if (Math.hypot(p.bx - camX, p.by - camY) > R) continue;
+    quad([[p.bx, p.by, 0], [p.bx + W_ISO, p.by, 0], [p.bx + W_ISO, p.by + D_ISO, 0], [p.bx, p.by + D_ISO, 0]], N ? '#22402C' : '#9CCB6B');
+  }
+
+  // depth-sorted buildings + agents
+  const items = [];
+  for (const b of WORLD.buildings) {
+    const cxw = b.bx + W_ISO / 2, cyw = b.by + D_ISO / 2;
+    const d = (cxw - camX) * fx + (cyw - camY) * fy;
+    const rr = Math.hypot(cxw - camX, cyw - camY);
+    if (rr > R || d < -3) continue;
+    items.push({ kind: 'b', b, d: Math.max(0.1, rr) });
+  }
+  for (const ag of agents.values()) {
+    const w = worldPosOf(ag);
+    const rr = Math.hypot(w.x - camX, w.y - camY);
+    if (rr > R) continue;
+    items.push({ kind: 'a', a: ag, w, d: Math.max(0.05, rr) });
+  }
+  items.sort((p, q) => q.d - p.d);
+
+  for (const it of items) {
+    if (it.kind === 'a') {
+      const w = it.w;
+      const pfoot = proj(w.x, w.y, w.z);
+      if (!pfoot) continue;
+      const frames = spriteFramesFor(it.a);
+      const img = frames[Math.max(0, it.a.frame)] || frames[0];
+      const hpx = (it.a.isKid ? 26 : 40) * pfoot.s;
+      const wpx = hpx * (img.width / img.height);
+      ctx.save();
+      if ((it.a.dirFace || 1) < 0) { ctx.translate(pfoot.x, 0); ctx.scale(-1, 1); ctx.translate(-pfoot.x, 0); }
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(img, pfoot.x - wpx / 2, pfoot.y - hpx, wpx, hpx);
+      ctx.restore();
+      continue;
+    }
+    const b = it.b;
+    let wallC = WALLS[b.seed % WALLS.length];
+    if (b.style === 'eiffel') wallC = '#A87C58';
+    const cs = [[b.bx, b.by], [b.bx + W_ISO, b.by], [b.bx + W_ISO, b.by + D_ISO], [b.bx, b.by + D_ISO]];
+    const shadeK = [0.86, 0.95, 1.0, 0.9];
+    for (let k = 0; k < 4; k++) {
+      const p0 = cs[k], p1 = cs[(k + 1) % 4];
+      const mx = (p0[0] + p1[0]) / 2, my = (p0[1] + p1[1]) / 2;
+      const nx = (p1[1] - p0[1]), ny = -(p1[0] - p0[0]);
+      if (nx * (camX - mx) + ny * (camY - my) <= 0) continue;   // backface
+      const col = shade(wallC, 1, shadeK[k]);
+      if (!quad([[p0[0], p0[1], 0], [p1[0], p1[1], 0], [p1[0], p1[1], b.H], [p0[0], p0[1], b.H]], col, shade(wallC, 1, 0.7))) continue;
+      // floors: windows near, stripes far
+      const nearB = it.d < 9;
+      for (let fi = 0; fi < b.floors; fi++) {
+        const hb = LOBBY_HZ + fi * FLOOR_HZ, ht = hb + FLOOR_HZ;
+        if (ht > b.H - 4) break;
+        if (nearB) {
+          for (const [wi, [t0, t1]] of [[0, [0.14, 0.3]], [1, [0.42, 0.58]], [2, [0.7, 0.86]]].entries()) {
+            const lit = N && rnd(b.seed * 131 + fi * 17 + wi * 7) > 0.55;
+            const w0 = [p0[0] + (p1[0] - p0[0]) * t0, p0[1] + (p1[1] - p0[1]) * t0];
+            const w1 = [p0[0] + (p1[0] - p0[0]) * t1, p0[1] + (p1[1] - p0[1]) * t1];
+            quad([[w0[0], w0[1], hb + 3], [w1[0], w1[1], hb + 3], [w1[0], w1[1], ht - 3], [w0[0], w0[1], ht - 3]],
+              lit ? '#FFD98A' : (N ? '#25314A' : GLASS));
+          }
+        } else {
+          const q0 = proj(p0[0], p0[1], ht), q1 = proj(p1[0], p1[1], ht);
+          if (q0 && q1) {
+            ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+            ctx.beginPath(); ctx.moveTo(q0.x, q0.y); ctx.lineTo(q1.x, q1.y); ctx.stroke();
+          }
+        }
+      }
+    }
+    // name over the door when close
+    if (it.d < 7) {
+      const tp = proj(b.bx + W_ISO / 2, b.by + D_ISO / 2, b.H + 14);
+      if (tp) {
+        ctx.font = `700 ${Math.min(15, 9 * tp.s * 8)}px ui-monospace, Menlo, monospace`;
+        ctx.textAlign = 'center';
+        ctx.fillStyle = N ? '#E8ECF2' : '#2B2F3A';
+        ctx.fillText(b.name, tp.x, tp.y);
+      }
+    }
+  }
 }
 function updateCamera(dt) {
   if (!cam.active) return;
@@ -2284,7 +2521,7 @@ mapwrap.addEventListener('dblclick', exitToOverview);
 
 let lastUserPan = 0;
 function ensureVisible(x, y) {
-  if (cam.active) return;                               // the follow-cam owns the view
+  if (cam.active || followId) return;                   // a camera mode owns the view
   if (performance.now() - lastUserPan < 8000) return;   // the user is driving the camera
   const pad = 80;
   const { scrollLeft, scrollTop, clientWidth, clientHeight } = mapwrap;
