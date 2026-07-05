@@ -128,6 +128,8 @@
   @keyframes roam { from { transform: translate(0, 0); } to { transform: translate(var(--dx, 0px), var(--dy, 0px)); } }
   .spin { animation: spinwheel var(--wdur, 1s) linear infinite; transform-box: fill-box; transform-origin: center; }
   @keyframes spinwheel { to { transform: rotate(360deg); } }
+  .blink { animation: blink 0.7s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0.1; } }
   /* construction dust as each floor lands */
   .puff { animation: puff 0.55s ease-out forwards; transform-box: fill-box; transform-origin: center; pointer-events: none; }
   @keyframes puff { from { opacity: 0.6; transform: scale(0.35); } to { opacity: 0; transform: scale(2); } }
@@ -1034,7 +1036,7 @@ function buildMap(root) {
       const bgy = Math.min(rows - 1, Math.floor(rnd(i * 5 + 2) * rows));
       const x0 = bgx * PITCH_X - S_ISO / 2, x1 = (bgx + 1) * PITCH_X - S_ISO / 2;
       const y0 = bgy * PITCH_Y - S_ISO / 2, y1 = (bgy + 1) * PITCH_Y - S_ISO / 2;
-      const types = ['sedan', 'sedan', 'sedan', 'taxi', 'van'];
+      const types = ['sedan', 'sedan', 'sedan', 'taxi', 'taxi', 'van', 'police', 'bus'];
       CARS.push({
         corners: [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }],
         leg: Math.floor(rnd(i + 9) * 4), t: rnd(i + 11),
@@ -1222,53 +1224,181 @@ function carPos(c) {
 function buildCarBody(c, N) {
   if (!c.el) return;
   c.el.replaceChildren();
+  c.flareEls = [];
   const g = c.el;
   const { axis, dir } = carLegInfo(c);
-  const isVan = c.type === 'van';
-  const len = isVan ? 1.42 : 1.28, wid = isVan ? 0.64 : 0.58;
+  const T = c.type;
+  const len = T === 'bus' ? 1.9 : T === 'van' ? 1.45 : 1.3;
+  const wid = T === 'bus' ? 0.62 : T === 'van' ? 0.64 : 0.56;
   const wx = axis === 'x' ? len : wid, wy = axis === 'x' ? wid : len;
-  const body = c.type === 'taxi' ? '#F2C21F' : (N ? shade(c.color, 0.9, 0.7) : c.color);
-  const side = shade(body, 1, 0.86), side2 = shade(body, 1, 0.74);
-  const top = shade(body, 1, 1.1);
-  const glass = N ? '#FFE9AE' : '#CFE8F7', glass2 = N ? '#E8CE8E' : '#AFCFE4';
+  const x0 = -wx / 2, y0 = -wy / 2;
+  let body = c.color;
+  if (T === 'taxi') body = '#F2C21F';
+  if (T === 'police') body = '#F2F5FA';
+  if (T === 'bus') body = '#E8734A';
+  if (N) body = shade(body, 0.95, 0.85);
+  const sideC = shade(body, 1, 0.88), sideC2 = shade(body, 1, 0.78);
+  const roofC = shade(body, 1, 1.12);
+  const dark = shade(body, 1, 0.5);
+  const glass = N ? '#22304A' : '#A9D6E8';
+  const glassHi = N ? '#FFE9AE' : '#DCF0F8';
+  const pillar = shade(body, 1, 0.62);
+  const chrome = N ? '#8A93A6' : '#C9CED6';
 
-  el('ellipse', { cx: 0, cy: 3, rx: (len + wid) * 13, ry: (len + wid) * 5.5, fill: '#2B3345', opacity: 0.18 }, g);
-  // body shell + bumpers
-  isoBox(g, -wx / 2, -wy / 2, wx, wy, 3, isVan ? 19 : 12, top, side, side2, isoV);
-  const bl = axis === 'x' ? 0.1 : wid - 0.06, bw = axis === 'x' ? wid - 0.06 : 0.1;
-  isoBox(g, -wx / 2 - (axis === 'x' ? 0.05 : 0), -wy / 2 - (axis === 'x' ? 0 : 0.05), bl === 0.1 ? 0.1 : bl, axis === 'x' ? bw + 0.06 : 0.1, 3, 8, shade(body, 1, 0.6), shade(body, 1, 0.55), shade(body, 1, 0.5), isoV);
-  isoBox(g, (axis === 'x' ? wx / 2 - 0.05 : -wx / 2), (axis === 'x' ? -wy / 2 : wy / 2 - 0.05), axis === 'x' ? 0.1 : wx, axis === 'x' ? wy : 0.1, 3, 8, shade(body, 1, 0.6), shade(body, 1, 0.55), shade(body, 1, 0.5), isoV);
-  // cabin (sedan/taxi) or windshield band (van)
-  if (isVan) {
-    isoBox(g, -wx / 2 + 0.06, -wy / 2 + 0.06, wx - 0.12, wy - 0.12, 19, 24, shade(body, 1, 1.2), glass, glass2, isoV);
-  } else {
-    const back = -0.08 * dir;
-    const a0 = back - 0.3, a1 = back + 0.3;
-    const cx0 = axis === 'x' ? a0 : -wid / 2 + 0.05, cy0 = axis === 'x' ? -wid / 2 + 0.05 : a0;
-    const cwx = axis === 'x' ? a1 - a0 : wid - 0.1, cwy = axis === 'x' ? wid - 0.1 : a1 - a0;
-    isoBox(g, cx0, cy0, cwx, cwy, 12, 21, shade(body, 1, 1.15), glass, glass2, isoV);
-  }
-  if (c.type === 'taxi') {
-    isoBox(g, -0.1, -0.07, 0.2, 0.14, 21, 26, '#FFFFFF', '#E8E8E8', '#D9D9D9', isoV);
-  }
-  // tyres — spinning
-  const { B: cb, C: cc, D: cd } = cornersOf(-wx / 2, -wy / 2, wx, wy, isoV);
-  const lerp2 = (p, q, t) => ({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t });
-  drawWheel(g, lerp2(cd, cc, 0.24), 5, c.seed + 21);
-  drawWheel(g, lerp2(cd, cc, 0.78), 5, c.seed + 22);
-  drawWheel(g, lerp2(cc, cb, 0.55), 4.2, c.seed + 23);
-  // lights lead the way: white up front, red behind
+  /* wall machinery: which of the four walls face the camera, and quads on them */
+  const wallsOf = (bx0, by0, bwx, bwy) => {
+    const pts = [isoV(bx0, by0), isoV(bx0 + bwx, by0), isoV(bx0 + bwx, by0 + bwy), isoV(bx0, by0 + bwy)];
+    const cyc = (pts[0].y + pts[1].y + pts[2].y + pts[3].y) / 4;
+    const vis = [0, 1, 2, 3].map(k => (pts[k].y + pts[(k + 1) % 4].y) / 2 > cyc + 0.01);
+    const at = (k, t, h) => {
+      const a = pts[k], b = pts[(k + 1) % 4];
+      return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t - h };
+    };
+    const quad = (k, t0, t1, h0, h1) => P([at(k, t0, h1), at(k, t1, h1), at(k, t1, h0), at(k, t0, h0)]);
+    return { pts, vis, at, quad };
+  };
+  const frontK = axis === 'x' ? (dir > 0 ? 1 : 3) : (dir > 0 ? 2 : 0);
+  const rearK = (frontK + 2) % 4;
+  const sideKs = axis === 'x' ? [0, 2] : [1, 3];
+  // map "u from the front (0) to the rear (1)" onto a wall's own t direction
+  const tFront = k => (axis === 'x' ? (k === 0 ? (dir > 0 ? 1 : 0) : (dir > 0 ? 0 : 1))
+    : (k === 1 ? (dir > 0 ? 1 : 0) : (dir > 0 ? 0 : 1)));
+  const tu = (k, u) => (tFront(k) === 1 ? 1 - u : u);
+  const spanU = (k, u0, u1) => { const a = tu(k, u0), b = tu(k, u1); return a < b ? [a, b] : [b, a]; };
+  // a box occupying [u0..u1] measured back from the nose, inset from the flanks
+  const boxAlong = (u0, u1, inset, hb, ht, cT, cL, cR) => {
+    const a0 = len / 2 - u1 * len, a1 = len / 2 - u0 * len;
+    const lo = dir > 0 ? a0 : -a1, hi = dir > 0 ? a1 : -a0;
+    if (axis === 'x') isoBox(g, lo, y0 + inset, hi - lo, wy - 2 * inset, hb, ht, cT, cL, cR, isoV);
+    else isoBox(g, x0 + inset, lo, wx - 2 * inset, hi - lo, hb, ht, cT, cL, cR, isoV);
+  };
   const av = axis === 'x' ? { x: 1, y: 0 } : { x: 0, y: 1 };
   const pv = axis === 'x' ? { x: 0, y: 1 } : { x: 1, y: 0 };
+
+  el('ellipse', { cx: 0, cy: 3, rx: (len + wid) * 13, ry: (len + wid) * 5.5, fill: '#2B3345', opacity: 0.18 }, g);
+
+  // chassis skirt, bumpers, body shell
+  isoBox(g, x0, y0, wx, wy, 1.5, 4, dark, shade(dark, 1, 0.9), shade(dark, 1, 0.8), isoV);
+  boxAlong(0, 0.045, 0.015, 3.5, 8, chrome, shade(chrome, 1, 0.85), shade(chrome, 1, 0.7));
+  boxAlong(0.955, 1, 0.015, 3.5, 8, chrome, shade(chrome, 1, 0.85), shade(chrome, 1, 0.7));
+  const tall = T === 'bus' || T === 'van';
+  isoBox(g, x0, y0, wx, wy, 4, tall ? (T === 'bus' ? 21 : 19) : 10, tall ? roofC : shade(body, 1, 1.04), sideC, sideC2, isoV);
+
+  const bw = wallsOf(x0, y0, wx, wy);
+  const visSide = sideKs.find(k => bw.vis[k]);   // exactly one flank faces the camera
+
+  if (T === 'sedan' || T === 'taxi' || T === 'police') {
+    // hood, cabin greenhouse, trunk — a real three-box silhouette
+    boxAlong(0.02, 0.34, 0.02, 10, 12.2, T === 'police' ? '#2B2F3A' : shade(body, 1, 1.07), sideC, sideC2);
+    boxAlong(0.7, 0.985, 0.02, 10, 12.8, shade(body, 1, 1.05), sideC, sideC2);
+    boxAlong(0.3, 0.72, 0.05, 10, 20, roofC, pillar, shade(pillar, 1, 0.85));
+    // glass, painted per true orientation
+    const cw = wallsOf(
+      axis === 'x' ? (dir > 0 ? len / 2 - 0.72 * len : -len / 2 + 0.3 * len) : x0 + 0.05,
+      axis === 'x' ? y0 + 0.05 : (dir > 0 ? len / 2 - 0.72 * len : -len / 2 + 0.3 * len),
+      axis === 'x' ? 0.42 * len : wid - 0.1,
+      axis === 'x' ? wid - 0.1 : 0.42 * len,
+    );
+    if (cw.vis[frontK]) el('polygon', { points: cw.quad(frontK, 0.1, 0.9, 12, 19), fill: glassHi }, g);
+    if (cw.vis[rearK]) el('polygon', { points: cw.quad(rearK, 0.12, 0.88, 12, 18.2), fill: glass }, g);
+    for (const k of sideKs) {
+      if (!cw.vis[k]) continue;
+      el('polygon', { points: cw.quad(k, ...spanU(k, 0.06, 0.46), 12, 18.4), fill: glass }, g);
+      el('polygon', { points: cw.quad(k, ...spanU(k, 0.54, 0.94), 12, 18.4), fill: glass }, g);
+    }
+    // door seams + handles on the visible flank
+    if (visSide !== undefined) {
+      for (const u of [0.44, 0.7]) {
+        el('polygon', { points: bw.quad(visSide, tu(visSide, u), tu(visSide, u) + 0.006, 4, 10), fill: dark, opacity: 0.55 }, g);
+      }
+      for (const u of [0.5, 0.76]) {
+        el('polygon', { points: bw.quad(visSide, ...spanU(visSide, u, u + 0.045), 8.2, 9.4), fill: chrome }, g);
+      }
+    }
+    if (T === 'taxi') {
+      isoBox(g, -0.1, -0.07, 0.2, 0.14, 20, 25, '#FFFFFF', '#E8E8E8', '#D9D9D9', isoV);
+      if (visSide !== undefined) {   // checker band
+        for (let u = 0.05; u < 0.92; u += 0.08) {
+          el('polygon', { points: bw.quad(visSide, ...spanU(visSide, u, u + 0.04), 6, 8.4), fill: Math.round(u / 0.08) % 2 ? '#26262B' : '#F5F5F5' }, g);
+        }
+      }
+    }
+    if (T === 'police') {
+      const lb = (off, col, delay) => {
+        const p0 = isoV(av.x * -0.02 + pv.x * off, av.y * -0.02 + pv.y * off);
+        const e = el('rect', { x: p0.x - 3, y: p0.y - 24.5, width: 6, height: 4, rx: 1, fill: col, class: 'blink', style: `animation-delay:${delay}s` }, g);
+        return e;
+      };
+      lb(-0.09, '#E04B3A', 0);
+      lb(0.09, '#3A6EE0', 0.35);
+      if (visSide !== undefined) {
+        el('polygon', { points: bw.quad(visSide, ...spanU(visSide, 0.3, 0.7), 5, 9), fill: '#2B2F3A' }, g);
+      }
+    }
+  } else if (T === 'van') {
+    el('title', {}, g);
+    const vw = wallsOf(x0 + 0.03, y0 + 0.03, wx - 0.06, wy - 0.06);
+    if (vw.vis[frontK]) el('polygon', { points: vw.quad(frontK, 0.1, 0.9, 11, 17.5), fill: glassHi }, g);
+    for (const k of sideKs) {
+      if (!vw.vis[k]) continue;
+      el('polygon', { points: vw.quad(k, ...spanU(k, 0.06, 0.4), 11, 16.8), fill: glass }, g);
+      el('polygon', { points: vw.quad(k, tu(k, 0.52), tu(k, 0.52) + 0.007, 4.5, 17), fill: dark, opacity: 0.6 }, g);  // sliding door
+      el('polygon', { points: vw.quad(k, ...spanU(k, 0.55, 0.6), 9, 10.2), fill: chrome }, g);
+    }
+    if (vw.vis[rearK]) el('polygon', { points: vw.quad(rearK, 0.5, 0.507, 5, 17), fill: dark, opacity: 0.6 }, g);  // rear doors
+    // roof rails
+    boxAlong(0.12, 0.88, 0.1, 19, 20.4, pillar, pillar, shade(pillar, 1, 0.85));
+  } else {   // bus
+    const uw = wallsOf(x0 + 0.02, y0 + 0.02, wx - 0.04, wy - 0.04);
+    if (uw.vis[frontK]) {
+      el('polygon', { points: uw.quad(frontK, 0.08, 0.92, 10, 19), fill: glassHi }, g);
+      el('polygon', { points: uw.quad(frontK, 0.25, 0.75, 19.5, 21.5), fill: '#FFFFFF' }, g);   // route sign
+    }
+    for (const k of sideKs) {
+      if (!uw.vis[k]) continue;
+      for (let u = 0.1; u < 0.9; u += 0.14) {
+        el('polygon', { points: uw.quad(k, ...spanU(k, u, u + 0.1), 11.5, 18.5), fill: glass }, g);
+      }
+      el('polygon', { points: uw.quad(k, ...spanU(k, 0.03, 0.09), 4.5, 18.5), fill: glassHi }, g);   // front door
+    }
+    isoBox(g, -0.25, -0.12, 0.5, 0.24, 21, 23.5, shade(roofC, 1, 0.9), pillar, shade(pillar, 1, 0.85), isoV);   // roof AC
+  }
+
+  // wheels ONLY on the visible flank — never on a bumper
+  if (visSide !== undefined) {
+    const wr = T === 'bus' ? 5.6 : 5;
+    for (const u of T === 'bus' ? [0.16, 0.84] : [0.2, 0.8]) {
+      drawWheel(g, bw.at(visSide, tu(visSide, u), -1), wr, c.seed + Math.round(u * 100));
+    }
+  }
+
+  // lights + brake flares, drawn only where that end of the car is actually visible
   for (const s of [-0.3, 0.3]) {
-    const hf = isoV(av.x * (len / 2) * dir + pv.x * wid * s, av.y * (len / 2) * dir + pv.y * wid * s);
-    el('circle', { cx: hf.x, cy: hf.y - 7, r: 2, fill: N ? '#FFE9AE' : '#F5FAFF', stroke: shade(body, 1, 0.6), 'stroke-width': 0.6 }, g);
-    const tl = isoV(-av.x * (len / 2) * dir + pv.x * wid * s, -av.y * (len / 2) * dir + pv.y * wid * s);
-    el('circle', { cx: tl.x, cy: tl.y - 7, r: 1.7, fill: '#E05252' }, g);
+    if (bw.vis[frontK]) {
+      const hf = isoV(av.x * (len / 2) * dir + pv.x * wid * s, av.y * (len / 2) * dir + pv.y * wid * s);
+      el('circle', { cx: hf.x, cy: hf.y - 6.5, r: 2, fill: N ? '#FFE9AE' : '#F5FAFF', stroke: pillar, 'stroke-width': 0.6 }, g);
+    }
+    if (bw.vis[rearK]) {
+      const tl = isoV(-av.x * (len / 2) * dir + pv.x * wid * s, -av.y * (len / 2) * dir + pv.y * wid * s);
+      el('rect', { x: tl.x - 1.6, y: tl.y - 8.2, width: 3.2, height: 2.4, rx: 0.8, fill: '#E05252' }, g);
+      c.flareEls.push(el('circle', { cx: tl.x, cy: tl.y - 7, r: 4.5, fill: '#FF5252', opacity: 0 }, g));
+    }
+  }
+  if (bw.vis[frontK] || bw.vis[rearK]) {   // license plate on whichever end shows
+    const k = bw.vis[frontK] ? frontK : rearK;
+    el('polygon', { points: bw.quad(k, 0.44, 0.56, 4.6, 6.8), fill: '#F5F5F5', stroke: '#8A93A6', 'stroke-width': 0.5 }, g);
+  }
+  // side mirror on the visible flank, near the A-pillar
+  if (visSide !== undefined && T !== 'bus') {
+    const m = bw.at(visSide, tu(visSide, 0.3), 11.5);
+    el('rect', { x: m.x - 0.7, y: m.y - 2.5, width: 1.4, height: 3, fill: pillar }, g);
+    el('circle', { cx: m.x, cy: m.y - 3.4, r: 1.7, fill: chrome }, g);
   }
   if (N) {
     const beam = isoV(av.x * len * 0.85 * dir, av.y * len * 0.85 * dir);
-    el('ellipse', { cx: beam.x, cy: beam.y - 4, rx: 13, ry: 7, fill: '#FFE9AE', opacity: 0.2 }, g);
+    const bd = isoV(av.x * dir, av.y * dir);
+    const angDeg = Math.atan2(bd.y, bd.x) * 180 / Math.PI;
+    el('ellipse', { cx: beam.x, cy: beam.y - 4, rx: 15, ry: 6, fill: '#FFE9AE', opacity: 0.2, transform: `rotate(${angDeg.toFixed(1)} ${beam.x} ${beam.y - 4})` }, g);
   }
 }
 function updateCars(dt) {
@@ -1279,6 +1409,12 @@ function updateCars(dt) {
     const edge = Math.min(c.t, 1 - c.t);
     const ease = 0.3 + 0.7 * Math.min(1, edge * 5.5);
     c.t += (c.speed * ease * dt) / legLen;
+    // brake lights flare while slowing for the corner
+    const braking = (1 - c.t) * legLen < 0.55;
+    if (braking !== c.braking) {
+      c.braking = braking;
+      if (c.flareEls) for (const f of c.flareEls) f.setAttribute('opacity', braking ? 0.7 : 0);
+    }
     if (c.t >= 1) {
       c.t -= 1;
       c.leg = (c.leg + 1) % 4;
